@@ -1,0 +1,11 @@
+{
+  "skill_id": "pick_place_color_block",
+  "version": "p0",
+  "status": "stable",
+  "parameters": {
+    "grasp_offset_m": [0.0, 0.0, 0.0],
+    "approach_height_m": 0.03,
+    "speed_m_s": 0.1
+  }
+}
+

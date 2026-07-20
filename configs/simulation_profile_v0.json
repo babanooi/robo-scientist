@@ -1,0 +1,8 @@
+{
+  "mode": "simulation",
+  "data_source": "simulation",
+  "runtime_status": "simulation_runtime_unverified",
+  "planner_name": "OMPL",
+  "simulation_stack": "Gazebo + MoveIt2",
+  "adapter_contract_version": "simulation-v0"
+}

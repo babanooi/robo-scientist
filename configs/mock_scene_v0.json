@@ -1,0 +1,7 @@
+{
+  "scene_id": "mock-fixed-workbench-v0",
+  "data_source": "mock",
+  "target_pose_m": {"x": 0.22, "y": 0.0, "z": 0.03},
+  "target_confidence": 0.95
+}
+

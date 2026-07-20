@@ -1,0 +1,11 @@
+{
+  "profile_version": "safety-v0",
+  "allow_real_robot": false,
+  "minimum_confidence": 0.8,
+  "workspace_min_m": [0.1, -0.2, 0.0],
+  "workspace_max_m": [0.4, 0.2, 0.3],
+  "max_speed_m_s": 0.15,
+  "max_timeout_s": 10.0,
+  "max_offset_m": 0.05
+}
+

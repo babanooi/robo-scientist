@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RoboScientist | Simulation Lab</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">ROBO SCIENTIST / S0-S1</p>
+        <h1>实验反馈控制台</h1>
+      </div>
+      <div class="system-state"><span class="state-dot"></span> LOCAL DEMO</div>
+    </header>
+
+    <main>
+      <section class="mock-banner" aria-label="数据来源说明">
+        <strong id="mode-label">SIMULATION</strong>
+        <span id="mode-notice">Gazebo/MoveIt2 虚拟仿真。当前运行时状态会在执行结果中明确显示。</span>
+      </section>
+
+      <section class="workbench" aria-label="任务执行台">
+        <form id="task-form" class="command-panel">
+          <p class="panel-kicker">01 / TASK INPUT</p>
+          <label for="task-text">实验指令</label>
+          <textarea id="task-text" name="task_text" rows="4">把红色方块放到右侧目标区域</textarea>
+          <fieldset>
+            <legend>执行模式</legend>
+            <div class="mode-grid">
+              <label><input type="radio" name="mode" value="simulation" checked><span>虚拟仿真<br><small>Gazebo + MoveIt2</small></span></label>
+              <label><input type="radio" name="mode" value="mock"><span>流程 Mock<br><small>本地开发兜底</small></span></label>
+              <label><input type="radio" name="mode" value="real_arm"><span>真实机械臂<br><small>未来安全接入</small></span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>注入场景（Mock 模式使用）</legend>
+            <div class="scenario-grid">
+              <label><input type="radio" name="scenario" value="success" checked><span>成功</span></label>
+              <label><input type="radio" name="scenario" value="pose_offset"><span>定位偏差</span></label>
+              <label><input type="radio" name="scenario" value="grasp_failed"><span>抓取失败</span></label>
+              <label><input type="radio" name="scenario" value="timeout"><span>执行超时</span></label>
+            </div>
+          </fieldset>
+          <button id="run-button" type="submit">提交实验</button>
+        </form>
+
+        <section class="telemetry" aria-live="polite">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">02 / EXPERIMENT TRACE</p>
+              <h2 id="result-title">等待任务</h2>
+            </div>
+            <span id="run-status" class="status status-idle">IDLE</span>
+          </div>
+          <div class="flow" id="flow">
+            <div>TaskSpec</div><i></i><div>Plan</div><i></i><div>Safety</div><i></i><div>Adapter</div><i></i><div>Result</div>
+          </div>
+          <dl class="run-facts" id="run-facts">
+            <div><dt>实验 ID</dt><dd>-</dd></div>
+            <div><dt>数据源</dt><dd>mock</dd></div>
+            <div><dt>Skill</dt><dd>-</dd></div>
+            <div><dt>场景</dt><dd>-</dd></div>
+            <div><dt>运行时状态</dt><dd>-</dd></div>
+          </dl>
+        </section>
+      </section>
+
+      <section class="readouts">
+        <article>
+          <p class="panel-kicker">03 / PLAN + SAFETY</p>
+          <pre id="plan-output">尚未生成计划。</pre>
+        </article>
+        <article>
+          <p class="panel-kicker">04 / RESULT + ANALYSIS</p>
+          <pre id="result-output">尚未执行。</pre>
+        </article>
+        <article>
+          <p class="panel-kicker">05 / SIMULATION TELEMETRY</p>
+          <pre id="simulation-output">仅在 simulation 模式显示规划、轨迹与碰撞字段。</pre>
+        </article>
+        <article>
+          <p class="panel-kicker">06 / CANDIDATE SKILL</p>
+          <pre id="skill-output">未生成候选版本。</pre>
+          <button id="iterate-button" type="button" disabled>使用候选版本迭代</button>
+        </article>
+      </section>
+    </main>
+
+    <footer>LOCAL EXPERIMENT LAB · SIMULATION-FIRST · REAL HARDWARE DISCONNECTED</footer>
+    <script src="/app.js"></script>
+  </body>
+</html>
