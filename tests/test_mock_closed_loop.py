@@ -51,6 +51,15 @@ class MockClosedLoopTests(unittest.TestCase):
         self.assertEqual(result.failure_analysis.recommended_parameter_family, "grasp_offset")
         candidate = json.loads((root / "skills" / f"{result.candidate_skill_version}.json").read_text(encoding="utf-8"))
         self.assertEqual(candidate["changed_parameter_family"], "grasp_offset")
+        self.assertEqual(candidate["parameters"]["grasp_offset_m"], [-0.02, 0.0, 0.0])
+
+    def test_pose_offset_without_signed_xyz_evidence_has_no_candidate(self):
+        result, _ = self.run_scenario(MockScenario.POSE_OFFSET)
+        from roboscientist.core.optimizer import candidate_from_failure
+
+        result.metrics = {"position_error_m": 0.02}
+        candidate = candidate_from_failure(result, SkillVersion(version="p0"))
+        self.assertIsNone(candidate)
 
     def test_grasp_failure_is_classified_and_gets_candidate(self):
         result, _ = self.run_scenario(MockScenario.GRASP_FAILED)
@@ -61,3 +70,16 @@ class MockClosedLoopTests(unittest.TestCase):
         result, _ = self.run_scenario(MockScenario.TIMEOUT)
         self.assertEqual(result.status, RunStatus.TIMED_OUT)
         self.assertIsNone(result.candidate_skill_version)
+
+    def test_path_safety_failure_changes_only_path_profile(self):
+        result, root = self.run_scenario(MockScenario.SUCCESS)
+        result.status = RunStatus.FAILED
+        from roboscientist.core.optimizer import candidate_from_failure
+        from roboscientist.schemas import ErrorCode, FailureInfo, SkillVersion
+
+        result.failure = FailureInfo(
+            code=ErrorCode.PATH_BLOCKED, stage="transit", message="recorded path clearance too small"
+        )
+        candidate = candidate_from_failure(result, SkillVersion(version="p0"))
+        self.assertEqual(candidate.changed_parameter_family, "path_profile")
+        self.assertGreater(candidate.parameters.transit_height_m, 0.12)

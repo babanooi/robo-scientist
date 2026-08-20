@@ -1,0 +1,32 @@
+{
+  "profile_version": "real-arm-fixed-workcell-template-v0",
+  "bridge_url": "http://127.0.0.1:8060",
+  "scene_id": "fixed-color-cube-workcell-v0",
+  "target_pose": {
+    "x": 0.22,
+    "y": 0.0,
+    "z": 0.023,
+    "frame_id": "base",
+    "object_id": "red-cube-01",
+    "confidence": 0.95,
+    "calibration_version": "REPLACE_WITH_VERIFIED_CAMERA_TO_BASE_VERSION"
+  },
+  "destination_pose": {
+    "x": 0.22,
+    "y": -0.08,
+    "z": 0.03,
+    "frame_id": "base"
+  },
+  "safety_constraints": {
+    "profile_version": "REPLACE_WITH_APPROVED_REAL_ARM_PROFILE",
+    "allow_real_robot": false,
+    "minimum_confidence": 0.9,
+    "workspace_min_m": [0.1, -0.2, 0.0],
+    "workspace_max_m": [0.4, 0.2, 0.3],
+    "max_speed_m_s": 0.15,
+    "max_timeout_s": 20.0,
+    "max_offset_m": 0.02
+  },
+  "motion_enabled": false,
+  "request_timeout_s": 120.0
+}

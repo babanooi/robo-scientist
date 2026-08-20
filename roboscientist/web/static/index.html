@@ -3,92 +3,134 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RoboScientist | Simulation Lab</title>
+    <title>RoboScientist | 实验谱系控制台</title>
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
     <header class="masthead">
       <div>
-        <p class="eyebrow">ROBO SCIENTIST / S0-S1</p>
-        <h1>实验反馈控制台</h1>
+        <p class="eyebrow">ROBO SCIENTIST / EXPERIMENT LINEAGE</p>
+        <h1>机械臂实验反馈控制台</h1>
       </div>
-      <div class="system-state"><span class="state-dot"></span> LOCAL DEMO</div>
+      <div class="system-state"><span class="state-dot"></span><span id="system-state">准备实验</span></div>
     </header>
 
     <main>
-      <section class="mock-banner" aria-label="数据来源说明">
-        <strong id="mode-label">SIMULATION</strong>
-        <span id="mode-notice">Gazebo/MoveIt2 虚拟仿真。当前运行时状态会在执行结果中明确显示。</span>
+      <section class="source-banner" aria-label="当前数据来源">
+        <div class="source-copy">
+          <strong id="mode-label">MOCK</strong>
+          <span id="mode-notice">流程 Mock 用于验证规划、归因和版本演进；不代表真实机械臂实验数据。</span>
+        </div>
+        <div id="runtime-capabilities" class="runtime-capabilities"><span>本地流程就绪</span></div>
       </section>
 
-      <section class="workbench" aria-label="任务执行台">
+      <section class="control-grid" aria-label="任务与实验状态">
         <form id="task-form" class="command-panel">
-          <p class="panel-kicker">01 / TASK INPUT</p>
+          <p class="panel-kicker">01 / DEFINE BASELINE</p>
+          <h2>建立基线实验</h2>
           <label for="task-text">实验指令</label>
-          <textarea id="task-text" name="task_text" rows="4">把红色方块放到右侧目标区域</textarea>
+          <textarea id="task-text" name="task_text" rows="3">把红色方块放到右侧目标区域</textarea>
           <fieldset>
             <legend>执行模式</legend>
             <div class="mode-grid">
-              <label><input type="radio" name="mode" value="simulation" checked><span>虚拟仿真<br><small>Gazebo + MoveIt2</small></span></label>
-              <label><input type="radio" name="mode" value="mock"><span>流程 Mock<br><small>本地开发兜底</small></span></label>
-              <label><input type="radio" name="mode" value="real_arm"><span>真实机械臂<br><small>未来安全接入</small></span></label>
+              <label><input type="radio" name="mode" value="mock" checked><span>流程 Mock<small>可复现迭代链路</small></span></label>
+              <label><input type="radio" name="mode" value="simulation"><span>虚拟仿真<small>Gazebo + MoveIt2</small></span></label>
+              <label><input type="radio" name="mode" value="real_arm"><span>真实机械臂<small>双安全门 + 证据判定</small></span></label>
             </div>
           </fieldset>
-          <fieldset>
-            <legend>注入场景（Mock 模式使用）</legend>
+          <fieldset id="scenario-fieldset">
+            <legend>实验扰动</legend>
             <div class="scenario-grid">
-              <label><input type="radio" name="scenario" value="success" checked><span>成功</span></label>
-              <label><input type="radio" name="scenario" value="pose_offset"><span>定位偏差</span></label>
+              <label><input type="radio" name="scenario" value="pose_offset" checked><span>定位偏差</span></label>
               <label><input type="radio" name="scenario" value="grasp_failed"><span>抓取失败</span></label>
               <label><input type="radio" name="scenario" value="timeout"><span>执行超时</span></label>
+              <label><input type="radio" name="scenario" value="success"><span>任务成功</span></label>
             </div>
           </fieldset>
-          <button id="run-button" type="submit">提交实验</button>
+          <button id="run-button" type="submit">运行 P0 基线实验</button>
+          <button id="campaign-button" type="button">运行一次受监督自动迭代</button>
         </form>
 
-        <section class="telemetry" aria-live="polite">
+        <section class="run-overview" aria-live="polite">
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">02 / EXPERIMENT TRACE</p>
-              <h2 id="result-title">等待任务</h2>
+              <p class="panel-kicker">02 / CURRENT EXPERIMENT</p>
+              <h2 id="result-title">等待基线实验</h2>
             </div>
             <span id="run-status" class="status status-idle">IDLE</span>
-          </div>
-          <div class="flow" id="flow">
-            <div>TaskSpec</div><i></i><div>Plan</div><i></i><div>Safety</div><i></i><div>Adapter</div><i></i><div>Result</div>
           </div>
           <dl class="run-facts" id="run-facts">
             <div><dt>实验 ID</dt><dd>-</dd></div>
             <div><dt>数据源</dt><dd>mock</dd></div>
-            <div><dt>Skill</dt><dd>-</dd></div>
-            <div><dt>场景</dt><dd>-</dd></div>
-            <div><dt>运行时状态</dt><dd>-</dd></div>
+            <div><dt>Skill 版本</dt><dd>p0</dd></div>
+            <div><dt>实验场景</dt><dd>-</dd></div>
+            <div><dt>安全检查</dt><dd>-</dd></div>
+            <div><dt>运行状态</dt><dd>-</dd></div>
           </dl>
+          <div class="current-evidence" id="current-evidence">
+            <span class="evidence-label">当前结论</span>
+            <p>提交 P0 后，系统会保留失败证据、候选参数与后续验证记录。</p>
+          </div>
         </section>
       </section>
 
-      <section class="readouts">
-        <article>
-          <p class="panel-kicker">03 / PLAN + SAFETY</p>
+      <section class="feedback-loop" aria-labelledby="loop-title">
+        <div class="section-heading">
+          <div>
+            <p class="panel-kicker">03 / AUTONOMOUS FEEDBACK LOOP</p>
+            <h2 id="loop-title">实验如何改变下一轮计划</h2>
+          </div>
+          <span class="sample-note" id="sample-note">尚未开始</span>
+        </div>
+        <div class="loop-track" id="loop-track">
+          <article class="loop-step is-pending"><span class="step-index">P0</span><h3>基线计划</h3><p>等待任务输入与安全检查。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">02</span><h3>结果与证据</h3><p>等待一次可追溯实验结果。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">P1</span><h3>候选版本</h3><p>失败归因后只修改一个参数族。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">04</span><h3>独立验证</h3><p>需要重复实验后才可作版本决策。</p></article>
+        </div>
+        <div class="decision-row">
+          <div id="decision-output" class="decision-output"><strong>版本决策待定</strong><span>先运行基线实验，系统才会产生可审计的证据链。</span></div>
+          <button id="iterate-button" type="button" disabled>运行候选 P1 验证</button>
+        </div>
+      </section>
+
+      <section class="evidence-grid" aria-label="迭代证据">
+        <section class="lineage-panel">
+          <div class="section-heading compact">
+            <div><p class="panel-kicker">04 / EXPERIMENT LINEAGE</p><h2>实验谱系</h2></div>
+            <span id="lineage-count">0 轮</span>
+          </div>
+          <ol id="lineage-list" class="lineage-list">
+            <li class="empty-lineage">每次实验都会以 P0、P1... 的顺序保留，不会覆盖上一轮。</li>
+          </ol>
+        </section>
+
+        <section class="comparison-panel">
+          <div class="section-heading compact">
+            <div><p class="panel-kicker">05 / BASELINE VS CANDIDATE</p><h2>验证对比</h2></div>
+            <span class="sample-note">门槛: 每版至少 10 次</span>
+          </div>
+          <div id="comparison-output" class="comparison-empty">候选版本生成后，此处比较 P0 与 P1 的结果证据、定位误差和运动指标。</div>
+        </section>
+      </section>
+
+      <section class="technical-trace" aria-label="可复算技术记录">
+        <details>
+          <summary>查看当前计划与安全检查</summary>
           <pre id="plan-output">尚未生成计划。</pre>
-        </article>
-        <article>
-          <p class="panel-kicker">04 / RESULT + ANALYSIS</p>
+        </details>
+        <details>
+          <summary>查看当前结果、归因与原始指标</summary>
           <pre id="result-output">尚未执行。</pre>
-        </article>
-        <article>
-          <p class="panel-kicker">05 / SIMULATION TELEMETRY</p>
-          <pre id="simulation-output">仅在 simulation 模式显示规划、轨迹与碰撞字段。</pre>
-        </article>
-        <article>
-          <p class="panel-kicker">06 / CANDIDATE SKILL</p>
-          <pre id="skill-output">未生成候选版本。</pre>
-          <button id="iterate-button" type="button" disabled>使用候选版本迭代</button>
-        </article>
+        </details>
+        <details id="simulation-trace">
+          <summary>查看仿真遥测</summary>
+          <pre id="simulation-output">仅 simulation 模式显示规划、轨迹与碰撞字段。</pre>
+        </details>
       </section>
     </main>
 
-    <footer>LOCAL EXPERIMENT LAB · SIMULATION-FIRST · REAL HARDWARE DISCONNECTED</footer>
+    <footer>EXPERIMENT EVIDENCE FIRST · MOCK IS NOT HARDWARE · CANDIDATES REQUIRE REPEATED VALIDATION</footer>
     <script src="/app.js"></script>
   </body>
 </html>

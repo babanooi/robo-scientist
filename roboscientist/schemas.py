@@ -27,6 +27,10 @@ class ErrorCode(str, Enum):
     HARDWARE_UNVERIFIED = "HARDWARE_UNVERIFIED"
     POSE_OFFSET = "POSE_OFFSET"
     GRASP_FAILED = "GRASP_FAILED"
+    PATH_BLOCKED = "PATH_BLOCKED"
+    TARGET_NOT_FOUND = "TARGET_NOT_FOUND"
+    BRIDGE_UNAVAILABLE = "BRIDGE_UNAVAILABLE"
+    EXECUTION_FAILED = "EXECUTION_FAILED"
     TIMEOUT = "TIMEOUT"
     STOPPED = "STOPPED"
 
@@ -75,6 +79,7 @@ class TaskSpec(BaseModel):
 class SkillParameters(BaseModel):
     grasp_offset_m: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     approach_height_m: float = Field(default=0.03, gt=0.0, le=0.15)
+    transit_height_m: float = Field(default=0.12, gt=0.0, le=0.30)
     speed_m_s: float = Field(default=0.1, gt=0.0, le=1.0)
 
 
@@ -118,6 +123,7 @@ class ExperimentPlan(BaseModel):
     adapter: str
     expected_data_source: str = "mock"
     target_pose: ObjectPose
+    destination_pose: Pose
     timeout_s: float = Field(default=8.0, gt=0.0)
     safety_constraints: SafetyConstraints = Field(default_factory=SafetyConstraints)
     created_at: datetime = Field(default_factory=utc_now)

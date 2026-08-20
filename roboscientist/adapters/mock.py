@@ -56,30 +56,37 @@ class MockAdapter:
             )
         if self.scenario is MockScenario.POSE_OFFSET:
             actions = common + [
-                RobotActionResult(action="lift", status=RunStatus.FAILED, error_code=ErrorCode.POSE_OFFSET, message="simulated x offset"),
+                RobotActionResult(action="lift", status=RunStatus.FAILED, error_code=ErrorCode.POSE_OFFSET, message="Mock：检测到 X 方向偏差"),
             ]
             return AdapterExecution(
                 actions, Outcome(position_error_m=0.02), RunStatus.FAILED,
-                FailureInfo(code=ErrorCode.POSE_OFFSET, stage="grasp", message="simulated stable 20 mm x offset"),
-                {"execution_time_s": 0.9, "position_error_m": 0.02, "safety_events": 0.0},
+                FailureInfo(code=ErrorCode.POSE_OFFSET, stage="grasp", message="Mock：稳定的 +20 mm X 方向残差"),
+                {
+                    "execution_time_s": 0.9,
+                    "position_error_m": 0.02,
+                    "position_error_x_m": 0.02,
+                    "position_error_y_m": 0.0,
+                    "position_error_z_m": 0.0,
+                    "safety_events": 0.0,
+                },
                 {"scene": "mock://scene/pose_offset"},
             )
         if self.scenario is MockScenario.GRASP_FAILED:
             actions = common + [
-                RobotActionResult(action="lift", status=RunStatus.FAILED, error_code=ErrorCode.GRASP_FAILED, message="simulated grip loss"),
+                RobotActionResult(action="lift", status=RunStatus.FAILED, error_code=ErrorCode.GRASP_FAILED, message="Mock：提起时物体脱落"),
             ]
             return AdapterExecution(
                 actions, Outcome(position_error_m=0.004), RunStatus.FAILED,
-                FailureInfo(code=ErrorCode.GRASP_FAILED, stage="grasp", message="simulated object not retained"),
+                FailureInfo(code=ErrorCode.GRASP_FAILED, stage="grasp", message="Mock：夹爪未能保持物体"),
                 {"execution_time_s": 0.8, "position_error_m": 0.004, "safety_events": 0.0},
                 {"scene": "mock://scene/grasp_failed"},
             )
         actions = common + [
-            RobotActionResult(action="lift", status=RunStatus.TIMED_OUT, error_code=ErrorCode.TIMEOUT, message="simulated timeout", duration_s=plan.timeout_s),
+            RobotActionResult(action="lift", status=RunStatus.TIMED_OUT, error_code=ErrorCode.TIMEOUT, message="Mock：执行超时", duration_s=plan.timeout_s),
         ]
         return AdapterExecution(
             actions, Outcome(), RunStatus.TIMED_OUT,
-            FailureInfo(code=ErrorCode.TIMEOUT, stage="execution", message="simulated execution timeout"),
+            FailureInfo(code=ErrorCode.TIMEOUT, stage="execution", message="Mock：执行超时"),
             {"execution_time_s": plan.timeout_s, "safety_events": 0.0},
             {"scene": "mock://scene/timeout"},
         )

@@ -46,3 +46,29 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(result["scene_id"], "simulation-virtual-workcell-v0")
         self.assertFalse(result["simulation"]["planning_success"])
         self.assertEqual(record["execution_mode"], "simulation")
+
+    def test_runtime_reports_selected_adapter_without_execution(self):
+        runtime = self.application.runtime("simulation")
+        self.assertEqual(runtime["data_source"], "simulation")
+        self.assertEqual(runtime["motion_state"], "unavailable")
+
+    def test_campaign_runs_only_a_bounded_candidate_attempt(self):
+        campaign = self.application.run_campaign(
+            "把红色方块放到右侧目标区域", "pose_offset", "mock", max_rounds=2
+        )
+        self.assertEqual(campaign["rounds_completed"], 2)
+        self.assertEqual(campaign["promotion"], "candidate_only")
+        self.assertEqual(campaign["records"][0]["result"]["skill_version"], "p0")
+        self.assertNotEqual(campaign["records"][1]["result"]["skill_version"], "p0")
+
+    def test_repeated_validation_from_baseline_keeps_the_same_candidate(self):
+        baseline = self.application.run_task(
+            "把红色方块放到右侧目标区域", "pose_offset", "mock"
+        )
+        experiment_id = baseline["result"]["experiment_id"]
+        first = self.application.iterate(experiment_id, "grasp_failed", "mock")
+        second = self.application.iterate(experiment_id, "success", "mock")
+
+        self.assertEqual(
+            first["result"]["skill_version"], second["result"]["skill_version"]
+        )

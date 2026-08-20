@@ -15,6 +15,8 @@ from roboscientist.schemas import (
     RunStatus,
     SafetyConstraints,
     SkillVersion,
+    ObjectPose,
+    Pose,
 )
 from roboscientist.storage import ExperimentStore
 
@@ -25,10 +27,16 @@ class Orchestrator:
         adapter,
         store: ExperimentStore,
         constraints: Optional[SafetyConstraints] = None,
+        scene_id: str = "mock-fixed-workbench-v0",
+        target_pose: Optional[ObjectPose] = None,
+        destination_pose: Optional[Pose] = None,
     ):
         self.adapter = adapter
         self.store = store
         self.constraints = constraints or SafetyConstraints()
+        self.scene_id = scene_id
+        self.target_pose = target_pose
+        self.destination_pose = destination_pose
 
     def run(self, text: str, skill: SkillVersion, confidence: float = 0.95) -> ExperimentResult:
         task = parse_task(text)
@@ -37,8 +45,11 @@ class Orchestrator:
             skill,
             self.adapter.name,
             self.constraints,
+            scene_id=self.scene_id,
             confidence=confidence,
             data_source=self.adapter.data_source,
+            target_pose=self.target_pose,
+            destination_pose=self.destination_pose,
         )
         self.store.ensure_skill(skill)
         self.store.write_plan(plan)

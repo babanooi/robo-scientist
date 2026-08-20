@@ -7,12 +7,15 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional, Union
+from urllib.parse import parse_qs, urlparse
 
 from roboscientist.adapters import (
     ArmPiAdapterStub,
     MockAdapter,
     MockScenario,
+    RealArmAdapter,
     SimulationAdapter,
+    load_real_arm_profile,
 )
 from roboscientist.core.orchestrator import Orchestrator
 from roboscientist.schemas import ExecutionMode, SkillVersion
@@ -25,10 +28,15 @@ ITERATE_PATH = re.compile(r"^/api/experiments/([A-Za-z0-9-]+)/iterate$")
 
 
 class DemoApplication:
-    """Selects an adapter without ever issuing real hardware commands."""
+    """Selects an adapter; real motion needs both a profile and an enable gate."""
 
-    def __init__(self, data_root: Union[Path, str] = "data"):
+    def __init__(
+        self, data_root: Union[Path, str] = "data", real_arm_profile: Optional[Union[Path, str]] = None
+    ):
         self.store = ExperimentStore(data_root)
+        self.real_arm_profile = (
+            load_real_arm_profile(real_arm_profile) if real_arm_profile else None
+        )
 
     @staticmethod
     def _scenario(value: str) -> MockScenario:
@@ -48,7 +56,22 @@ class DemoApplication:
             return MockAdapter(self._scenario(scenario))
         if selected_mode is ExecutionMode.SIMULATION:
             return SimulationAdapter()
+        if self.real_arm_profile:
+            return RealArmAdapter(self.real_arm_profile)
         return ArmPiAdapterStub()
+
+    def runtime(self, mode: str) -> dict:
+        adapter = self._adapter_for(mode, MockScenario.SUCCESS.value)
+        state = adapter.get_robot_state()
+        if not isinstance(state, dict):
+            state = {"available": False, "message": "adapter returned invalid runtime state"}
+        return {
+            "mode": mode,
+            "adapter": adapter.name,
+            "data_source": adapter.data_source,
+            "hardware_status": adapter.hardware_status,
+            **state,
+        }
 
     def run_task(
         self,
@@ -61,7 +84,15 @@ class DemoApplication:
             raise ValueError("task_text is required")
         selected_skill = skill or SkillVersion(version="p0")
         adapter = self._adapter_for(mode, scenario)
-        result = Orchestrator(adapter, self.store).run(task_text.strip(), selected_skill)
+        profile = getattr(adapter, "profile", None)
+        result = Orchestrator(
+            adapter,
+            self.store,
+            constraints=profile.safety_constraints if profile else None,
+            scene_id=profile.scene_id if profile else "mock-fixed-workbench-v0",
+            target_pose=profile.target_pose if profile else None,
+            destination_pose=profile.destination_pose if profile else None,
+        ).run(task_text.strip(), selected_skill)
         return self.experiment(result.experiment_id)
 
     def experiment(self, experiment_id: str) -> dict:
@@ -72,9 +103,9 @@ class DemoApplication:
         )
         data_source = record["result"]["data_source"]
         notices = {
-            "mock": "Mock workflow simulation. This is not real robot data.",
-            "simulation": "Gazebo/MoveIt2 virtual simulation. Runtime verification status is shown below.",
-            "real_arm": "Real-arm mode is disabled until an explicit safety-confirmed adapter is delivered.",
+            "mock": "流程 Mock 只验证规划、归因和版本演进，不代表真实机械臂数据。",
+            "simulation": "Gazebo/MoveIt2 虚拟仿真；运行时是否接通以本轮状态为准。",
+            "real_arm": "真实机械臂结果；运动需通过本地配置、桥接健康检查和双重放行门。",
         }
         record["execution_mode"] = data_source
         record["mode_notice"] = notices[data_source]
@@ -93,6 +124,36 @@ class DemoApplication:
         task_text = previous["plan"]["task"]["source_text"]
         selected_mode = mode or previous["result"]["data_source"]
         return self.run_task(task_text, scenario, selected_mode, skill)
+
+    def run_campaign(
+        self, task_text: str, scenario: str, mode: str, max_rounds: int = 2
+    ) -> dict:
+        """Run one baseline and bounded candidate attempts under the same safety gates.
+
+        This deliberately leaves every generated version as a candidate. A first
+        successful attempt is evidence, not enough data for automatic promotion.
+        """
+        if not isinstance(max_rounds, int) or not 1 <= max_rounds <= 3:
+            raise ValueError("max_rounds must be an integer from 1 to 3")
+        records = [self.run_task(task_text, scenario, mode)]
+        while len(records) < max_rounds:
+            current = records[-1]
+            if not current["candidate_skill"]:
+                break
+            records.append(self.iterate(
+                current["result"]["experiment_id"], scenario, mode
+            ))
+        latest = records[-1]
+        return {
+            "records": records,
+            "rounds_completed": len(records),
+            "promotion": "candidate_only",
+            "message": (
+                "The campaign keeps every new skill as a candidate; repeated "
+                "independent validation is required before promotion."
+            ),
+            "latest_experiment_id": latest["result"]["experiment_id"],
+        }
 
 
 MockApplication = DemoApplication
@@ -135,22 +196,31 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
         self._send_json(status, {"error": message})
 
     def do_GET(self) -> None:
-        if self.path in ("/", "/index.html"):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path in ("/", "/index.html"):
             self._send_file("index.html", "text/html; charset=utf-8")
             return
-        if self.path == "/app.js":
+        if path == "/app.js":
             self._send_file("app.js", "application/javascript; charset=utf-8")
             return
-        if self.path == "/app.css":
+        if path == "/app.css":
             self._send_file("app.css", "text/css; charset=utf-8")
             return
-        if self.path == "/api/skills":
+        if path == "/api/skills":
             self._send_json(
                 HTTPStatus.OK,
                 {"skills": self.application.store.list_skills()},
             )
             return
-        matched = EXPERIMENT_PATH.match(self.path)
+        if path == "/api/runtime":
+            try:
+                mode = parse_qs(parsed.query).get("mode", ["mock"])[0]
+                self._send_json(HTTPStatus.OK, self.application.runtime(mode))
+            except ValueError as error:
+                self._error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        matched = EXPERIMENT_PATH.match(path)
         if matched:
             try:
                 self._send_json(HTTPStatus.OK, self.application.experiment(matched.group(1)))
@@ -167,6 +237,15 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
                     body.get("task_text"),
                     body.get("scenario", "success"),
                     body.get("mode", "simulation"),
+                )
+                self._send_json(HTTPStatus.CREATED, response)
+                return
+            if self.path == "/api/campaigns":
+                response = self.application.run_campaign(
+                    body.get("task_text"),
+                    body.get("scenario", "success"),
+                    body.get("mode", "simulation"),
+                    body.get("max_rounds", 2),
                 )
                 self._send_json(HTTPStatus.CREATED, response)
                 return
@@ -187,9 +266,10 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
 
 
 def create_server(
-    host: str = "127.0.0.1", port: int = 8001, data_root: Union[Path, str] = "data"
+    host: str = "127.0.0.1", port: int = 8001, data_root: Union[Path, str] = "data",
+    real_arm_profile: Optional[Union[Path, str]] = None,
 ) -> ThreadingHTTPServer:
-    RoboScientistHandler.application = DemoApplication(data_root)
+    RoboScientistHandler.application = DemoApplication(data_root, real_arm_profile)
     return ThreadingHTTPServer((host, port), RoboScientistHandler)
 
 
@@ -198,8 +278,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--data-root", default="data")
+    parser.add_argument("--real-arm-profile", help="approved real-arm profile JSON; absent means real-arm mode is blocked")
     args = parser.parse_args()
-    server = create_server(args.host, args.port, args.data_root)
+    server = create_server(args.host, args.port, args.data_root, args.real_arm_profile)
     print(f"RoboScientist demo: http://{args.host}:{args.port}")
     try:
         server.serve_forever()

@@ -2,6 +2,7 @@
 .venv/
 data/experiments/
 data/skills/
+configs/real_arm_profile.local.json
 .DS_Store
 node_modules/
 
