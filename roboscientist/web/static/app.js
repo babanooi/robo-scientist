@@ -97,7 +97,9 @@ async function requestStop() {
   stopButton.textContent = '停止请求中...';
   try {
     const response = await request('/api/stop', {
-      mode: selectedMode(),
+      // A stop request must target the physical adapter even if the mode radio
+      // was changed while an experiment was running.
+      mode: 'real_arm',
       reason: 'web_operator_request',
     });
     const result = response.stop || {};
