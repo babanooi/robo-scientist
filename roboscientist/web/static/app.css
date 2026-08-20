@@ -37,7 +37,9 @@ h1 { margin-bottom: 5px; font-size: 38px; }
 h2 { margin-bottom: 18px; font-size: 24px; }
 h3 { margin-bottom: 8px; font-size: 18px; }
 .header-subtitle { margin: 0; color: var(--muted); font-size: 14px; }
-.header-status { padding-bottom: 5px; font-size: 12px; white-space: nowrap; }
+.header-status { display: flex; align-items: center; gap: 12px; padding-bottom: 5px; font-size: 12px; white-space: nowrap; }
+.stop-action { width: auto; min-height: 34px; padding: 0 12px; border-color: var(--signal); background: var(--signal); color: #fffdf4; font-size: 11px; }
+.stop-action:hover:not(:disabled) { background: var(--ink); border-color: var(--ink); }
 .state-dot { display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%; background: var(--signal); }
 main { padding: 20px 30px 52px; }
 

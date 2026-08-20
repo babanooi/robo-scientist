@@ -125,6 +125,20 @@ class DemoApplication:
             **state,
         }
 
+    def stop(self, mode: str = ExecutionMode.REAL_ARM.value, reason: str = "operator_request") -> dict:
+        """Request the adapter's fastest safe stop without starting a new experiment."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be a non-empty string")
+        adapter = self._adapter_for(mode, MockScenario.SUCCESS.value)
+        action = adapter.stop(reason.strip())
+        return {
+            "stop_id": new_id("stop"),
+            "mode": adapter.data_source,
+            "data_source": adapter.data_source,
+            "hardware_status": adapter.hardware_status,
+            "stop": action.model_dump(mode="json") if hasattr(action, "model_dump") else action,
+        }
+
     def run_task(
         self,
         task_text: str,
@@ -261,13 +275,15 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def _body(self) -> Dict:
+    def _body(self, *, allow_empty: bool = False) -> Dict:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as error:
             raise ValueError("Content-Length must be an integer") from error
-        if length <= 0:
+        if length <= 0 and not allow_empty:
             raise ValueError("request body is required")
+        if length <= 0:
+            return {}
         if length > 1_000_000:
             raise ValueError("request body is too large")
         try:
@@ -352,7 +368,7 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         request_id = new_id("request")
         try:
-            body = self._body()
+            body = self._body(allow_empty=self.path == "/api/stop")
             if self.path == "/api/tasks":
                 response = self.application.run_task(
                     body.get("task_text"),
@@ -371,6 +387,13 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
                     body.get("auto_run_p1", True),
                 )
                 self._send_json(HTTPStatus.CREATED, response)
+                return
+            if self.path == "/api/stop":
+                response = self.application.stop(
+                    body.get("mode", ExecutionMode.REAL_ARM.value),
+                    body.get("reason", "operator_request"),
+                )
+                self._send_json(HTTPStatus.OK, response)
                 return
             matched = ITERATE_PATH.match(self.path)
             if matched:

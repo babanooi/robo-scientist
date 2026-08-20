@@ -5,6 +5,7 @@ const runButton = document.querySelector('#run-button');
 const campaignButton = document.querySelector('#campaign-button');
 const iterateButton = document.querySelector('#iterate-button');
 const resetButton = document.querySelector('#reset-button');
+const stopButton = document.querySelector('#stop-button');
 const state = { history: [], campaign: null, config: null };
 
 const byId = (id) => document.querySelector(`#${id}`);
@@ -87,6 +88,29 @@ function setBusy(isBusy, label = '正在运行...') {
   runButton.textContent = isBusy ? label : '仅运行 P0（诊断）';
   iterateButton.disabled = isBusy || !candidateUnderTest();
   resetButton.disabled = isBusy || !candidateUnderTest();
+}
+
+async function requestStop() {
+  if (!stopButton || stopButton.disabled) return;
+  stopButton.disabled = true;
+  const previous = stopButton.textContent;
+  stopButton.textContent = '停止请求中...';
+  try {
+    const response = await request('/api/stop', {
+      mode: selectedMode(),
+      reason: 'web_operator_request',
+    });
+    const result = response.stop || {};
+    const stopped = result.status === 'succeeded' || result.stopped === true;
+    byId('system-state').textContent = stopped ? '已请求停止，等待人工检查' : '停止请求已返回，请立即人工检查';
+    byId('current-evidence').innerHTML = `<span class="field-label">人工接管 · ${escapeHtml(stopped ? '已确认' : '需检查')}</span><p>${escapeHtml(result.message || '停止结果未提供详细信息。')}</p>`;
+  } catch (error) {
+    byId('system-state').textContent = '停止请求失败，立即执行物理急停';
+    byId('current-evidence').innerHTML = `<span class="field-label">人工接管 · 失败</span><p>${escapeHtml(error.message)}。请立即执行现场物理急停。</p>`;
+  } finally {
+    stopButton.disabled = false;
+    stopButton.textContent = previous;
+  }
 }
 
 function candidateUnderTest() {
@@ -537,6 +561,7 @@ iterateButton.addEventListener('click', async () => {
 });
 
 resetButton.addEventListener('click', () => window.location.reload());
+stopButton.addEventListener('click', requestStop);
 
 document.querySelectorAll('input[name="mode"]').forEach((input) => input.addEventListener('change', () => {
   const isMock = selectedMode() === 'mock';

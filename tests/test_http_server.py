@@ -126,6 +126,28 @@ class HttpServerTests(unittest.TestCase):
         self.assertTrue(payload["error"]["request_id"].startswith("request-"))
         self.assertNotIn("sensitive-fixture-value", encoded)
 
+    def test_stop_route_returns_adapter_result_without_starting_experiment(self):
+        base = self.start_server()
+        status, payload = self.post(
+            f"{base}/api/stop",
+            {"mode": "mock", "reason": "operator_test"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["stop_id"].startswith("stop-"))
+        self.assertEqual(payload["mode"], "mock")
+        self.assertEqual(payload["stop"]["action"], "stop")
+        self.assertEqual(payload["stop"]["message"], "operator_test")
+
+    def test_stop_route_allows_empty_body_and_defaults_to_real_arm(self):
+        base = self.start_server()
+        request = Request(f"{base}/api/stop", method="POST")
+        with urlopen(request, timeout=5) as response:
+            status = response.status
+            payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["mode"], "real_arm")
+        self.assertEqual(payload["stop"]["action"], "stop")
+
 
 if __name__ == "__main__":
     unittest.main()
