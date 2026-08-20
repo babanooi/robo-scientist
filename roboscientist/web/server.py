@@ -127,6 +127,8 @@ class DemoApplication:
 
     def stop(self, mode: str = ExecutionMode.REAL_ARM.value, reason: str = "operator_request") -> dict:
         """Request the adapter's fastest safe stop without starting a new experiment."""
+        if mode != ExecutionMode.REAL_ARM.value:
+            raise ValueError("stop endpoint only supports mode=real_arm")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("reason must be a non-empty string")
         adapter = self._adapter_for(mode, MockScenario.SUCCESS.value)

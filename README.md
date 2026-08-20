@@ -50,7 +50,7 @@ The campaign API contract is:
 - `POST /api/campaigns` with `{"task_text": "把红色方块放到目标区域", "scenario": "pose_offset", "mode": "real_arm", "use_qwen": true, "auto_run_p1": true}`
 - `GET /api/campaigns/<campaign_id>` for the append-only campaign and Qwen evidence
 - `GET /api/experiments/<experiment_id>` for an individual P0 or P1 package
-- `POST /api/stop` for a safety stop request; body may be `{}` and defaults to `mode=real_arm`
+- `POST /api/stop` for a safety stop request; body may be `{}` and defaults to `mode=real_arm` (other modes are rejected)
 
 The API fields above are frozen for the hardware handoff, but are not accepted
 as verified until the target commit passes the server smoke test. Hardware must
