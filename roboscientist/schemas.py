@@ -2,10 +2,10 @@
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -94,6 +94,37 @@ class SkillVersion(BaseModel):
     source_experiment_id: Optional[str] = None
 
 
+class ScientificPlanDraft(BaseModel):
+    """Qwen-authored scientific intent; it never contains robot commands."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    research_question: str = Field(min_length=1)
+    hypothesis: str = Field(min_length=1)
+    controlled_variables: List[str] = Field(min_length=1)
+    success_criteria: List[str] = Field(min_length=1)
+    stop_conditions: List[str] = Field(min_length=1)
+    expected_observation: str = Field(min_length=1)
+
+
+class FeedbackAdjustmentDraft(BaseModel):
+    """Qwen decision at the planning layer, constrained to safe strategies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_summary: str = Field(min_length=1)
+    failure_interpretation: str = Field(min_length=1)
+    strategy: Literal[
+        "signed_residual_compensation",
+        "raise_grasp_z",
+        "raise_transit_height",
+        "stop_for_human",
+    ]
+    recommended_parameter_family: Literal["grasp_offset", "path_profile", "none"]
+    expected_effect: str = Field(min_length=1)
+    alternative_explanation: str = Field(min_length=1)
+
+
 class SafetyConstraints(BaseModel):
     profile_version: str = "safety-v0"
     allow_real_robot: bool = False
@@ -121,11 +152,16 @@ class ExperimentPlan(BaseModel):
     skill: SkillVersion
     scene_id: str
     adapter: str
+    execution_scenario: str = "default"
     expected_data_source: str = "mock"
     target_pose: ObjectPose
     destination_pose: Pose
     timeout_s: float = Field(default=8.0, gt=0.0)
     safety_constraints: SafetyConstraints = Field(default_factory=SafetyConstraints)
+    planning_source: Literal["deterministic", "qwen"] = "deterministic"
+    scientific_plan: Optional[ScientificPlanDraft] = None
+    feedback_adjustment: Optional[FeedbackAdjustmentDraft] = None
+    qwen_invocation_ref: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

@@ -69,7 +69,11 @@ class RealArmAdapterTests(unittest.TestCase):
                     "path_length_m": 0.61,
                     "execution_time_s": 3.2,
                 },
-                "artifacts": {"trajectory": "robot://runs/1/trajectory.json", "state": "robot://runs/1/state.json"},
+                "artifacts": {
+                    "trajectory": "robot://runs/1/trajectory.json",
+                    "state": "robot://runs/1/state.json",
+                    "evaluator_type": "vision",
+                },
             }
 
         adapter._request = fake_request

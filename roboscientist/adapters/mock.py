@@ -55,16 +55,44 @@ class MockAdapter:
                 artifacts={"scene": "mock://scene/success", "trajectory": "mock://trajectory/success"},
             )
         if self.scenario is MockScenario.POSE_OFFSET:
+            # Keep the failure deterministic while making the candidate parameter
+            # observable: P0 has a +20 mm residual and the generated -20 mm
+            # compensation succeeds in this same mock scene.
+            effective_x_error = 0.02 + plan.skill.parameters.grasp_offset_m[0]
+            if abs(effective_x_error) <= 0.003:
+                actions = common + [
+                    RobotActionResult(action="lift", status=RunStatus.SUCCEEDED, duration_s=0.3),
+                    RobotActionResult(action="place", status=RunStatus.SUCCEEDED, duration_s=0.4),
+                ]
+                return AdapterExecution(
+                    actions,
+                    Outcome(
+                        object_grasped=True,
+                        object_lifted=True,
+                        object_placed=True,
+                        position_error_m=abs(effective_x_error),
+                    ),
+                    RunStatus.SUCCEEDED,
+                    metrics={
+                        "execution_time_s": 1.3,
+                        "position_error_m": abs(effective_x_error),
+                        "position_error_x_m": effective_x_error,
+                        "position_error_y_m": 0.0,
+                        "position_error_z_m": 0.0,
+                        "safety_events": 0.0,
+                    },
+                    artifacts={"scene": "mock://scene/pose_offset"},
+                )
             actions = common + [
                 RobotActionResult(action="lift", status=RunStatus.FAILED, error_code=ErrorCode.POSE_OFFSET, message="Mock：检测到 X 方向偏差"),
             ]
             return AdapterExecution(
-                actions, Outcome(position_error_m=0.02), RunStatus.FAILED,
-                FailureInfo(code=ErrorCode.POSE_OFFSET, stage="grasp", message="Mock：稳定的 +20 mm X 方向残差"),
+                actions, Outcome(position_error_m=abs(effective_x_error)), RunStatus.FAILED,
+                FailureInfo(code=ErrorCode.POSE_OFFSET, stage="grasp", message=f"Mock：稳定的 {effective_x_error * 1000:.1f} mm X 方向残差"),
                 {
                     "execution_time_s": 0.9,
-                    "position_error_m": 0.02,
-                    "position_error_x_m": 0.02,
+                    "position_error_m": abs(effective_x_error),
+                    "position_error_x_m": effective_x_error,
                     "position_error_y_m": 0.0,
                     "position_error_z_m": 0.0,
                     "safety_events": 0.0,

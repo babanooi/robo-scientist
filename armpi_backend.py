@@ -28,7 +28,7 @@ class ArmPiBackend:
     """Maps the high-level bridge contract onto proven local ArmPi functions."""
 
     def __init__(self) -> None:
-        self.script_dir = os.environ.get("ARMPI_SCRIPT_DIR", "/home/pi/my_armpi")
+        self.script_dir = os.environ.get("ARMPI_SCRIPT_DIR", "/home/ubuntu/my_armpi")
         self.motion_module_name = os.environ.get("ARMPI_MOTION_MODULE", "move_to_pose")
         self.control_module_name = os.environ.get("ARMPI_CONTROL_MODULE", "robot_control")
         self.home_module_name = os.environ.get("ARMPI_HOME_MODULE", "home_control")

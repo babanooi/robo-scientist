@@ -41,6 +41,7 @@ class RealArmClosedLoopEndToEndTests(unittest.TestCase):
             del actions, evidence
             if plan["skill"]["version"] == "p0":
                 return {
+                    "evaluator_type": "vision",
                     "status": "failed",
                     "hardware_status": "real_arm_physical_outcome_evaluated",
                     "outcome": {"position_error_m": 0.01},
@@ -57,6 +58,7 @@ class RealArmClosedLoopEndToEndTests(unittest.TestCase):
                     },
                 }
             return {
+                "evaluator_type": "vision",
                 "status": "succeeded",
                 "hardware_status": "real_arm_physical_outcome_verified",
                 "outcome": {

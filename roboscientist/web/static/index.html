@@ -3,43 +3,59 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RoboScientist | 实验谱系控制台</title>
+    <meta name="color-scheme" content="light">
+    <title>RoboScientist | 科学实验闭环控制台</title>
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
     <header class="masthead">
-      <div>
-        <p class="eyebrow">ROBO SCIENTIST / EXPERIMENT LINEAGE</p>
-        <h1>机械臂实验反馈控制台</h1>
+      <div class="brand-lockup">
+        <p class="eyebrow">ROBO SCIENTIST / CLOSED-LOOP LAB</p>
+        <h1>机械臂科学实验控制台</h1>
+        <p class="header-subtitle">规划、执行、观测与反馈迭代的可审计工作台</p>
       </div>
-      <div class="system-state"><span class="state-dot"></span><span id="system-state">准备实验</span></div>
+      <div class="header-status">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span id="system-state">正在读取运行配置</span>
+      </div>
     </header>
 
     <main>
-      <section class="source-banner" aria-label="当前数据来源">
+      <section class="source-banner" aria-label="当前运行来源与服务状态">
         <div class="source-copy">
-          <strong id="mode-label">MOCK</strong>
-          <span id="mode-notice">流程 Mock 用于验证规划、归因和版本演进；不代表真实机械臂实验数据。</span>
+          <span id="mode-label" class="source-badge source-mock">MOCK · 流程验证</span>
+          <span id="mode-notice">流程 Mock 仅验证软件闭环，不代表仿真或实机实验结果。</span>
         </div>
-        <div id="runtime-capabilities" class="runtime-capabilities"><span>本地流程就绪</span></div>
+        <div class="service-status">
+          <span id="qwen-status" class="service-chip is-checking">Qwen · 检查中</span>
+          <div id="runtime-capabilities" class="runtime-capabilities"><span>运行时 · 检查中</span></div>
+        </div>
       </section>
 
-      <section class="control-grid" aria-label="任务与实验状态">
+      <section class="workspace-grid" aria-label="实验配置与科学意图">
         <form id="task-form" class="command-panel">
-          <p class="panel-kicker">01 / DEFINE BASELINE</p>
-          <h2>建立基线实验</h2>
-          <label for="task-text">实验指令</label>
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">01 / EXPERIMENT SETUP</p>
+              <h2>定义 P0 基线</h2>
+            </div>
+            <span class="locked-note">P1 条件锁定继承</span>
+          </div>
+
+          <label for="task-text">任务目标</label>
           <textarea id="task-text" name="task_text" rows="3">把红色方块放到右侧目标区域</textarea>
+
           <fieldset>
-            <legend>执行模式</legend>
+            <legend>证据来源</legend>
             <div class="mode-grid">
-              <label><input type="radio" name="mode" value="mock" checked><span>流程 Mock<small>可复现迭代链路</small></span></label>
-              <label><input type="radio" name="mode" value="simulation"><span>虚拟仿真<small>Gazebo + MoveIt2</small></span></label>
-              <label><input type="radio" name="mode" value="real_arm"><span>真实机械臂<small>双安全门 + 证据判定</small></span></label>
+              <label><input type="radio" name="mode" value="mock" checked><span><strong>Mock</strong><small>软件流程验证</small></span></label>
+              <label><input type="radio" name="mode" value="simulation"><span><strong>Simulation</strong><small>仿真证据</small></span></label>
+              <label><input type="radio" name="mode" value="real_arm"><span><strong>Real Arm</strong><small>实机证据</small></span></label>
             </div>
           </fieldset>
+
           <fieldset id="scenario-fieldset">
-            <legend>实验扰动</legend>
+            <legend>Mock 扰动</legend>
             <div class="scenario-grid">
               <label><input type="radio" name="scenario" value="pose_offset" checked><span>定位偏差</span></label>
               <label><input type="radio" name="scenario" value="grasp_failed"><span>抓取失败</span></label>
@@ -47,29 +63,55 @@
               <label><input type="radio" name="scenario" value="success"><span>任务成功</span></label>
             </div>
           </fieldset>
-          <button id="run-button" type="submit">运行 P0 基线实验</button>
-          <button id="campaign-button" type="button">运行一次受监督自动迭代</button>
+
+          <label id="qwen-control" class="qwen-control is-unavailable">
+            <input id="use-qwen" type="checkbox" disabled>
+            <span><strong>启用 Qwen 科学规划与反馈</strong><small id="qwen-control-help">等待服务器配置</small></span>
+          </label>
+
+          <div class="action-stack">
+            <button id="campaign-button" class="primary-action" type="button">运行 P0 → P1 科研闭环</button>
+            <button id="run-button" class="secondary-action" type="submit">仅运行 P0（诊断）</button>
+            <button id="reset-button" class="tertiary-action" type="button" disabled>重置 P0 条件</button>
+          </div>
+          <p class="form-note">闭环运行会固定任务、场景、目标位姿、标定和评价方式；反馈只允许修改一个参数族。</p>
         </form>
 
-        <section class="run-overview" aria-live="polite">
+        <section class="science-panel" aria-live="polite">
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">02 / CURRENT EXPERIMENT</p>
-              <h2 id="result-title">等待基线实验</h2>
+              <p class="panel-kicker">02 / SCIENTIFIC INTENT</p>
+              <h2 id="result-title">研究问题与假设</h2>
             </div>
-            <span id="run-status" class="status status-idle">IDLE</span>
+            <div class="status-group">
+              <span id="planning-source" class="status status-idle">等待规划</span>
+              <span id="run-status" class="status status-idle">IDLE</span>
+            </div>
           </div>
+
+          <div class="science-copy">
+            <article>
+              <span class="field-label">研究问题</span>
+              <p id="research-question">运行 Qwen 科研闭环后显示。</p>
+            </article>
+            <article>
+              <span class="field-label">可检验假设</span>
+              <p id="hypothesis">系统必须先记录 P0 结果，再决定是否生成 P1。</p>
+            </article>
+          </div>
+
           <dl class="run-facts" id="run-facts">
-            <div><dt>实验 ID</dt><dd>-</dd></div>
-            <div><dt>数据源</dt><dd>mock</dd></div>
-            <div><dt>Skill 版本</dt><dd>p0</dd></div>
-            <div><dt>实验场景</dt><dd>-</dd></div>
+            <div><dt>Campaign ID</dt><dd>-</dd></div>
+            <div><dt>闭环分类</dt><dd>未分类</dd></div>
+            <div><dt>数据来源</dt><dd>Mock</dd></div>
+            <div><dt>场景</dt><dd>-</dd></div>
+            <div><dt>结果评估器</dt><dd>-</dd></div>
             <div><dt>安全检查</dt><dd>-</dd></div>
-            <div><dt>运行状态</dt><dd>-</dd></div>
           </dl>
-          <div class="current-evidence" id="current-evidence">
-            <span class="evidence-label">当前结论</span>
-            <p>提交 P0 后，系统会保留失败证据、候选参数与后续验证记录。</p>
+
+          <div id="current-evidence" class="current-evidence">
+            <span class="field-label">当前结论</span>
+            <p>尚未运行实验。Mock、仿真与实机结果会保持明确区分。</p>
           </div>
         </section>
       </section>
@@ -77,60 +119,96 @@
       <section class="feedback-loop" aria-labelledby="loop-title">
         <div class="section-heading">
           <div>
-            <p class="panel-kicker">03 / AUTONOMOUS FEEDBACK LOOP</p>
-            <h2 id="loop-title">实验如何改变下一轮计划</h2>
+            <p class="panel-kicker">03 / PLAN → RUN → LEARN → RETRY</p>
+            <h2 id="loop-title">反馈如何改变下一轮计划</h2>
           </div>
-          <span class="sample-note" id="sample-note">尚未开始</span>
+          <span id="sample-note" class="sample-note">尚未开始</span>
         </div>
-        <div class="loop-track" id="loop-track">
-          <article class="loop-step is-pending"><span class="step-index">P0</span><h3>基线计划</h3><p>等待任务输入与安全检查。</p></article>
-          <article class="loop-step is-pending"><span class="step-index">02</span><h3>结果与证据</h3><p>等待一次可追溯实验结果。</p></article>
-          <article class="loop-step is-pending"><span class="step-index">P1</span><h3>候选版本</h3><p>失败归因后只修改一个参数族。</p></article>
-          <article class="loop-step is-pending"><span class="step-index">04</span><h3>独立验证</h3><p>需要重复实验后才可作版本决策。</p></article>
+        <div id="loop-track" class="loop-track">
+          <article class="loop-step is-pending"><span class="step-index">01</span><h3>Qwen 规划</h3><p>等待研究问题、假设和成功标准。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">P0</span><h3>安全执行</h3><p>等待确定性安全检查和基线运行。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">03</span><h3>结果评价</h3><p>等待结构化结果与失败残差。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">04</span><h3>反馈决策</h3><p>等待 Qwen 接受、拒绝或停止。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">P1</span><h3>同条件验证</h3><p>仅在条件一致且安全检查通过后执行。</p></article>
         </div>
         <div class="decision-row">
-          <div id="decision-output" class="decision-output"><strong>版本决策待定</strong><span>先运行基线实验，系统才会产生可审计的证据链。</span></div>
-          <button id="iterate-button" type="button" disabled>运行候选 P1 验证</button>
+          <div id="decision-output" class="decision-output decision-pending">
+            <span class="decision-code">WAIT</span>
+            <div><strong>反馈决策待定</strong><p>系统不会把动作完成或人工确认表述为自主反馈成功。</p></div>
+          </div>
+          <button id="iterate-button" class="secondary-action" type="button" disabled>按 P0 固定条件验证 P1</button>
+        </div>
+      </section>
+
+      <section class="qwen-evidence" aria-labelledby="qwen-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="panel-kicker">04 / QWEN AUDIT TRAIL</p>
+            <h2 id="qwen-title">模型调用证据</h2>
+          </div>
+          <span class="sample-note">密钥不会写入证据</span>
+        </div>
+        <div class="qwen-evidence-grid">
+          <article id="planning-evidence" class="audit-card">
+            <div class="audit-heading"><strong>科学规划</strong><span class="audit-state">未调用</span></div>
+            <dl><div><dt>模型</dt><dd>-</dd></div><div><dt>Request ID</dt><dd>-</dd></div><div><dt>Prompt SHA256</dt><dd>-</dd></div></dl>
+          </article>
+          <article id="feedback-evidence" class="audit-card">
+            <div class="audit-heading"><strong>结果反馈</strong><span class="audit-state">未调用</span></div>
+            <dl><div><dt>模型</dt><dd>-</dd></div><div><dt>Request ID</dt><dd>-</dd></div><div><dt>Prompt SHA256</dt><dd>-</dd></div></dl>
+          </article>
         </div>
       </section>
 
       <section class="evidence-grid" aria-label="迭代证据">
         <section class="lineage-panel">
           <div class="section-heading compact">
-            <div><p class="panel-kicker">04 / EXPERIMENT LINEAGE</p><h2>实验谱系</h2></div>
+            <div><p class="panel-kicker">05 / P0-P1 LINEAGE</p><h2>实验谱系</h2></div>
             <span id="lineage-count">0 轮</span>
           </div>
           <ol id="lineage-list" class="lineage-list">
-            <li class="empty-lineage">每次实验都会以 P0、P1... 的顺序保留，不会覆盖上一轮。</li>
+            <li class="empty-lineage">每轮实验追加保存；P1 不覆盖 P0。</li>
           </ol>
         </section>
 
         <section class="comparison-panel">
           <div class="section-heading compact">
-            <div><p class="panel-kicker">05 / BASELINE VS CANDIDATE</p><h2>验证对比</h2></div>
-            <span class="sample-note">门槛: 每版至少 10 次</span>
+            <div><p class="panel-kicker">06 / SAME-CONDITION CHECK</p><h2>同条件对照</h2></div>
+            <span id="condition-status" class="status status-idle">待验证</span>
           </div>
-          <div id="comparison-output" class="comparison-empty">候选版本生成后，此处比较 P0 与 P1 的结果证据、定位误差和运动指标。</div>
+          <div id="condition-output" class="condition-output">
+            <p>运行 P1 后检查模式、场景、目标、标定与评价口径是否一致。</p>
+          </div>
+          <div id="comparison-output" class="comparison-empty">获得 P0 与 P1 后显示结果和运动指标。</div>
+          <p class="policy-note"><strong>项目内部晋升策略：</strong>P0、P1 每版建议至少 10 次重复实验后再判断性能提升；这不是赛题官方固定次数。</p>
         </section>
       </section>
 
       <section class="technical-trace" aria-label="可复算技术记录">
         <details>
-          <summary>查看当前计划与安全检查</summary>
+          <summary>计划与安全检查</summary>
           <pre id="plan-output">尚未生成计划。</pre>
         </details>
         <details>
-          <summary>查看当前结果、归因与原始指标</summary>
+          <summary>结果、归因与指标</summary>
           <pre id="result-output">尚未执行。</pre>
         </details>
+        <details>
+          <summary>Campaign 与模型元数据</summary>
+          <pre id="campaign-output">尚未运行闭环。</pre>
+        </details>
         <details id="simulation-trace">
-          <summary>查看仿真遥测</summary>
-          <pre id="simulation-output">仅 simulation 模式显示规划、轨迹与碰撞字段。</pre>
+          <summary>仿真遥测</summary>
+          <pre id="simulation-output">仅 Simulation 模式显示规划、轨迹与碰撞字段。</pre>
         </details>
       </section>
     </main>
 
-    <footer>EXPERIMENT EVIDENCE FIRST · MOCK IS NOT HARDWARE · CANDIDATES REQUIRE REPEATED VALIDATION</footer>
+    <footer>
+      <span>ROBO SCIENTIST / EVIDENCE FIRST</span>
+      <span>MOCK ≠ SIMULATION ≠ REAL ARM</span>
+      <span>ACTION COMPLETE ≠ AUTONOMOUS SUCCESS</span>
+    </footer>
     <script src="/app.js"></script>
   </body>
 </html>

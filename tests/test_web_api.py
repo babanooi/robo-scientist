@@ -25,7 +25,7 @@ class WebApiTests(unittest.TestCase):
         stored = self.application.experiment(experiment_id)
         self.assertEqual(stored["plan"]["experiment_id"], experiment_id)
 
-        next_record = self.application.iterate(experiment_id, "success")
+        next_record = self.application.iterate(experiment_id)
         self.assertEqual(next_record["result"]["status"], "succeeded")
 
     def test_skills_and_page_are_available(self):
@@ -34,7 +34,7 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(self.application.store.list_skills()), 2)
         page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertIn("Gazebo + MoveIt2", page)
+        self.assertIn("仿真证据", page)
 
     def test_simulation_mode_returns_contract_data_not_mock_data(self):
         record = self.application.run_task(
@@ -54,7 +54,8 @@ class WebApiTests(unittest.TestCase):
 
     def test_campaign_runs_only_a_bounded_candidate_attempt(self):
         campaign = self.application.run_campaign(
-            "把红色方块放到右侧目标区域", "pose_offset", "mock", max_rounds=2
+            "把红色方块放到右侧目标区域", "pose_offset", "mock", max_rounds=2,
+            use_qwen=False,
         )
         self.assertEqual(campaign["rounds_completed"], 2)
         self.assertEqual(campaign["promotion"], "candidate_only")
@@ -66,8 +67,8 @@ class WebApiTests(unittest.TestCase):
             "把红色方块放到右侧目标区域", "pose_offset", "mock"
         )
         experiment_id = baseline["result"]["experiment_id"]
-        first = self.application.iterate(experiment_id, "grasp_failed", "mock")
-        second = self.application.iterate(experiment_id, "success", "mock")
+        first = self.application.iterate(experiment_id)
+        second = self.application.iterate(experiment_id)
 
         self.assertEqual(
             first["result"]["skill_version"], second["result"]["skill_version"]

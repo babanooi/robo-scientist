@@ -481,6 +481,12 @@ class ArmPiFinalWrapperBackend:
         response_metrics.update({key: value for key, value in metrics.items() if key not in response_metrics})
         response_artifacts = response.setdefault("artifacts", {})
         response_artifacts.update({key: value for key, value in artifacts.items() if key not in response_artifacts})
+        # The upper layer must be able to prove whether physical outcomes came
+        # from the vision evaluator. Keep this classification in the stable
+        # artifact contract instead of relying on an unpersisted top-level field.
+        evaluator_type = response.get("evaluator_type")
+        if evaluator_type:
+            response_artifacts["evaluator_type"] = str(evaluator_type)
         outcome = response.get("outcome", {})
         if response.get("status") == "succeeded" and not all(
             outcome.get(field) is True

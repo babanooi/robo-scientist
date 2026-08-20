@@ -10,6 +10,11 @@ from armpi_backend import ArmPiBackend
 
 
 class ArmPiBackendTests(unittest.TestCase):
+    def test_defaults_to_documented_ubuntu_script_directory(self):
+        with patch.dict(os.environ, {}, clear=True):
+            backend = ArmPiBackend()
+        self.assertEqual(backend.script_dir, "/home/ubuntu/my_armpi")
+
     def test_candidate_offset_reaches_motion_script_and_evaluator_decides_result(self):
         moves = []
         motion = types.ModuleType("fixture_motion")

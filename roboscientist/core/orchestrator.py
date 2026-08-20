@@ -10,13 +10,16 @@ from roboscientist.core.task_parser import parse_task
 from roboscientist.schemas import (
     ErrorCode,
     ExperimentResult,
+    FeedbackAdjustmentDraft,
     FailureInfo,
     RobotActionResult,
     RunStatus,
     SafetyConstraints,
+    ScientificPlanDraft,
     SkillVersion,
     ObjectPose,
     Pose,
+    TaskSpec,
 )
 from roboscientist.storage import ExperimentStore
 
@@ -30,6 +33,7 @@ class Orchestrator:
         scene_id: str = "mock-fixed-workbench-v0",
         target_pose: Optional[ObjectPose] = None,
         destination_pose: Optional[Pose] = None,
+        execution_scenario: str = "default",
     ):
         self.adapter = adapter
         self.store = store
@@ -37,9 +41,22 @@ class Orchestrator:
         self.scene_id = scene_id
         self.target_pose = target_pose
         self.destination_pose = destination_pose
+        self.execution_scenario = execution_scenario
 
-    def run(self, text: str, skill: SkillVersion, confidence: float = 0.95) -> ExperimentResult:
-        task = parse_task(text)
+    def run(
+        self,
+        text: str,
+        skill: SkillVersion,
+        confidence: float = 0.95,
+        *,
+        task: Optional[TaskSpec] = None,
+        scientific_plan: Optional[ScientificPlanDraft] = None,
+        feedback_adjustment: Optional[FeedbackAdjustmentDraft] = None,
+        qwen_invocation_ref: Optional[str] = None,
+        planning_source: str = "deterministic",
+        allow_candidate: bool = True,
+    ) -> ExperimentResult:
+        task = task or parse_task(text)
         plan = build_plan(
             task,
             skill,
@@ -50,6 +67,11 @@ class Orchestrator:
             data_source=self.adapter.data_source,
             target_pose=self.target_pose,
             destination_pose=self.destination_pose,
+            execution_scenario=self.execution_scenario,
+            planning_source=planning_source,
+            scientific_plan=scientific_plan,
+            feedback_adjustment=feedback_adjustment,
+            qwen_invocation_ref=qwen_invocation_ref,
         )
         self.store.ensure_skill(skill)
         self.store.write_plan(plan)
@@ -88,9 +110,21 @@ class Orchestrator:
         result.failure_analysis = analyze(result)
         if result.failure_analysis:
             self.store.write_analysis(result.failure_analysis)
-        candidate = candidate_from_failure(result, skill)
-        if candidate:
-            self.store.write_skill(candidate)
-            result.candidate_skill_version = candidate.version
+        evaluator_type = result.artifacts.get("evaluator_type")
+        vision_evidence_available = (
+            result.data_source != "real_arm" or evaluator_type == "vision"
+        )
+        if allow_candidate and not vision_evidence_available and result.failure:
+            result.artifacts["candidate_gate"] = (
+                "blocked: real_arm automatic feedback requires evaluator_type=vision; "
+                f"received {evaluator_type or 'missing'}"
+            )
+        elif allow_candidate and vision_evidence_available:
+            candidate = candidate_from_failure(result, skill)
+            if candidate:
+                self.store.write_skill(candidate)
+                result.candidate_skill_version = candidate.version
+        elif not allow_candidate:
+            result.artifacts["candidate_gate"] = "not requested for bounded candidate verification"
         self.store.write_result(result)
         return result
