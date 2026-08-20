@@ -13,6 +13,21 @@ from roboscientist.core.task_parser import parse_task
 from roboscientist.schemas import SkillVersion
 
 
+def placeholder_paths(value, path="profile") -> list:
+    paths = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            paths.extend(placeholder_paths(item, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            paths.extend(placeholder_paths(item, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        normalized = value.strip().upper()
+        if "REPLACE_WITH" in normalized or "REPLACE WITH" in normalized or "替换" in value:
+            paths.append(path)
+    return paths
+
+
 def request_json(url: str, method: str = "GET", payload=None) -> dict:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = Request(
@@ -42,21 +57,52 @@ def main() -> int:
         help="fail unless result evaluation and candidate parameter runner are configured",
     )
     args = parser.parse_args()
-    profile = load_real_arm_profile(Path(args.profile))
+    profile_path = Path(args.profile)
+    try:
+        raw_profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"cannot read profile JSON: {error}") from error
+    placeholders = placeholder_paths(raw_profile)
+    if placeholders:
+        raise RuntimeError(
+            "profile still contains placeholders: " + ", ".join(placeholders)
+        )
+    profile = load_real_arm_profile(profile_path)
+    calibration_version = profile.target_pose.calibration_version.strip()
+    if not calibration_version:
+        raise RuntimeError("profile target calibration_version is empty")
     bridge_url = str(profile.bridge_url).rstrip("/")
     health = request_json(f"{bridge_url}/health")
     if health.get("ok") is not True or not isinstance(health.get("data"), dict):
         raise RuntimeError(f"bridge health is invalid: {health}")
     data = health["data"]
+    stop_probe = request_json(
+        f"{bridge_url}/stop", "POST", {"reason": "readiness_probe_idle"}
+    )
+    stop_verified = (
+        stop_probe.get("ok") is True
+        and isinstance(stop_probe.get("data"), dict)
+        and stop_probe["data"].get("stopped") is True
+    )
     checks = {
         "real_motion_mode": health.get("mode") == "real_motion",
         "backend_available": data.get("available") is True,
-        "software_stop": data.get("stop_available") is True,
+        "software_stop": data.get("stop_available") is True and stop_verified,
         "result_evaluator": data.get("result_evaluator_configured") is True,
         "candidate_parameter_runner": data.get("parameterized_skill_configured") is True,
+        "calibration_version_verified": True,
     }
-    print(json.dumps({"bridge": bridge_url, "checks": checks, "health": data}, indent=2))
-    required = ["real_motion_mode", "backend_available", "software_stop"]
+    print(json.dumps({
+        "bridge": bridge_url,
+        "checks": checks,
+        "health": data,
+        "stop_probe": stop_probe,
+        "calibration_version": calibration_version,
+    }, indent=2))
+    required = [
+        "real_motion_mode", "backend_available", "software_stop",
+        "calibration_version_verified",
+    ]
     if args.require_closed_loop:
         required.extend(["result_evaluator", "candidate_parameter_runner"])
     if any(not checks[name] for name in required):

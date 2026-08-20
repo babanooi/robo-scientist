@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -104,6 +105,22 @@ class _ScriptedQwen:
         )
 
 
+class _RuntimeFailingQwen(_ScriptedQwen):
+    def __init__(self, phase, secret):
+        super().__init__()
+        self.phase = phase
+        self.secret = secret
+
+    def complete_structured(self, *, phase, **kwargs):
+        if phase == self.phase:
+            error = RuntimeError(f"provider failure leaked {self.secret}")
+            error.request_payload = {"unsafe_custom_field": self.secret}
+            error.response_payload = {"debug": self.secret}
+            error.metadata = {"request_id": self.secret}
+            raise error
+        return super().complete_structured(phase=phase, **kwargs)
+
+
 class _RealEvaluatedAdapter:
     """Real-arm shaped adapter with externally supplied operator/hybrid evidence."""
 
@@ -145,6 +162,82 @@ class _RealEvaluatedAdapter:
                 "evaluator_type": self.evaluator_type,
                 "evaluation_file": f"fixture://{self.execute_count}/evaluation.json",
             },
+        )
+
+
+class _SceneMutatingOrchestrator:
+    def __init__(self, orchestrator):
+        self._orchestrator = orchestrator
+        self.run_count = 0
+
+    def __getattr__(self, name):
+        return getattr(self._orchestrator, name)
+
+    def run(self, *args, **kwargs):
+        self.run_count += 1
+        result = self._orchestrator.run(*args, **kwargs)
+        if self.run_count == 1:
+            self._orchestrator.scene_id = "changed-scene-v2"
+        return result
+
+
+class _RealVisionAdapter:
+    name = "real_arm"
+    data_source = "real_arm"
+    hardware_status = "real_arm_test_fixture"
+    evaluator_version = "fixture-vision-v1"
+
+    def __init__(self, missing_evidence_run=2):
+        self.execute_count = 0
+        self.missing_evidence_run = missing_evidence_run
+
+    def get_robot_state(self):
+        return {"data_source": "real_arm", "available": True}
+
+    def preflight(self, plan):
+        return RobotActionResult(action="preflight", status=RunStatus.SUCCEEDED)
+
+    def stop(self, reason):
+        return RobotActionResult(action="stop", status=RunStatus.REJECTED, message=reason)
+
+    def execute_pick_place(self, plan):
+        self.execute_count += 1
+        artifacts = {
+            "evaluator_type": "vision",
+            "evaluator_version": self.evaluator_version,
+            "evaluation_file": f"fixture://{self.execute_count}/evaluation.json",
+        }
+        if self.execute_count != self.missing_evidence_run:
+            artifacts["evaluation_evidence_1"] = "fixture://1/place.jpg"
+        if self.execute_count == 1:
+            return AdapterExecution(
+                actions=[RobotActionResult(action="pick_place", status=RunStatus.FAILED)],
+                outcome=Outcome(position_error_m=0.01),
+                status=RunStatus.FAILED,
+                failure=FailureInfo(
+                    code=ErrorCode.POSE_OFFSET,
+                    stage="place",
+                    message="vision fixture measured a signed residual",
+                ),
+                metrics={
+                    "position_error_m": 0.01,
+                    "position_error_x_m": 0.01,
+                    "position_error_y_m": 0.0,
+                    "position_error_z_m": 0.0,
+                },
+                artifacts=artifacts,
+            )
+        return AdapterExecution(
+            actions=[RobotActionResult(action="pick_place", status=RunStatus.SUCCEEDED)],
+            outcome=Outcome(
+                object_grasped=True,
+                object_lifted=True,
+                object_placed=True,
+                position_error_m=0.002,
+            ),
+            status=RunStatus.SUCCEEDED,
+            metrics={"position_error_m": 0.002},
+            artifacts=artifacts,
         )
 
 
@@ -238,6 +331,42 @@ class ScientificCampaignTests(unittest.TestCase):
         self.assertEqual(persisted["records"], [])
         self.assertIn("planning_error.json", persisted["qwen_evidence"])
 
+    def test_arbitrary_qwen_client_errors_are_stable_and_secret_free(self):
+        secret = "sk-runtime-secret-must-not-be-persisted"
+        for phase, code in (
+            ("planning", "QWEN_PLANNING_FAILED"),
+            ("adjustment", "QWEN_ADJUSTMENT_FAILED"),
+        ):
+            with self.subTest(phase=phase):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                store = ExperimentStore(temporary.name)
+                runner = ScientificCampaignRunner(
+                    store, qwen_client=_RuntimeFailingQwen(phase, secret)
+                )
+
+                with self.assertRaises(ScientificCampaignError) as raised:
+                    runner.run(
+                        TASK,
+                        _orchestrator(MockAdapter(MockScenario.POSE_OFFSET), store),
+                        baseline_skill=SkillVersion(version="p0"),
+                        use_qwen=True,
+                        auto_run_p1=True,
+                    )
+
+                error = raised.exception
+                self.assertEqual(error.code, code)
+                self.assertEqual(error.stage, phase)
+                self.assertNotIn(secret, str(error))
+                persisted = store.read_campaign(error.campaign_id)
+                serialized = json.dumps(persisted, ensure_ascii=False)
+                self.assertNotIn(secret, serialized)
+                metadata = persisted["qwen_evidence"][f"{phase}_metadata.json"]
+                self.assertEqual(metadata["error_code"], code)
+                self.assertEqual(metadata["stage"], phase)
+                self.assertEqual(metadata["campaign_id"], error.campaign_id)
+                self.assertIn(error.campaign_id, metadata["request_ref"])
+
     def test_operator_and_hybrid_real_arm_evidence_cannot_auto_iterate(self):
         for evaluator_type in ("operator", "hybrid"):
             with self.subTest(evaluator_type=evaluator_type):
@@ -265,6 +394,81 @@ class ScientificCampaignTests(unittest.TestCase):
         self.assertEqual(len(campaign["records"]), 1)
         self.assertEqual(campaign["decision"]["status"], "awaiting_confirmation")
         self.assertEqual(campaign["classification"], "supervised_or_incomplete")
+
+    def test_mutable_scene_blocks_p1_before_execution(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        store = ExperimentStore(temporary.name)
+        orchestrator = _SceneMutatingOrchestrator(
+            _orchestrator(MockAdapter(MockScenario.POSE_OFFSET), store)
+        )
+
+        campaign = ScientificCampaignRunner(store).run(
+            TASK,
+            orchestrator,
+            baseline_skill=SkillVersion(version="p0"),
+            use_qwen=False,
+            auto_run_p1=True,
+        )
+
+        self.assertEqual(orchestrator.run_count, 1)
+        self.assertEqual(len(campaign["records"]), 1)
+        self.assertEqual(campaign["decision"]["status"], "manual_review_required")
+        self.assertEqual(campaign["status"], "blocked")
+        self.assertEqual(campaign["classification"], "supervised_or_incomplete")
+        self.assertFalse(campaign["same_condition"]["verified"])
+        self.assertEqual(campaign["same_condition"]["phase"], "pre_p1")
+        self.assertIn(
+            "scene_id",
+            {item["field"] for item in campaign["same_condition"]["differences"]},
+        )
+
+    def test_missing_p1_vision_evidence_requires_manual_review(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        store = ExperimentStore(temporary.name)
+        adapter = _RealVisionAdapter()
+
+        campaign = ScientificCampaignRunner(store).run(
+            TASK,
+            _orchestrator(adapter, store),
+            baseline_skill=SkillVersion(version="p0"),
+            use_qwen=False,
+            auto_run_p1=True,
+        )
+
+        self.assertEqual(adapter.execute_count, 2)
+        self.assertEqual(len(campaign["records"]), 2)
+        self.assertEqual(campaign["decision"]["status"], "manual_review_required")
+        self.assertEqual(campaign["status"], "blocked")
+        self.assertEqual(campaign["classification"], "supervised_or_incomplete")
+        self.assertTrue(campaign["same_condition"]["verified"])
+        self.assertFalse(campaign["p1_vision_evidence"]["verified"])
+        self.assertIn(
+            "evaluation_evidence_*",
+            campaign["p1_vision_evidence"]["missing_or_mismatched"],
+        )
+
+    def test_missing_p0_vision_evidence_blocks_p1(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        store = ExperimentStore(temporary.name)
+        adapter = _RealVisionAdapter(missing_evidence_run=1)
+
+        campaign = ScientificCampaignRunner(store).run(
+            TASK,
+            _orchestrator(adapter, store),
+            baseline_skill=SkillVersion(version="p0"),
+            use_qwen=False,
+            auto_run_p1=True,
+        )
+
+        self.assertEqual(adapter.execute_count, 1)
+        self.assertEqual(len(campaign["records"]), 1)
+        self.assertEqual(campaign["decision"]["status"], "manual_review_required")
+        self.assertEqual(campaign["status"], "blocked")
+        self.assertEqual(campaign["classification"], "supervised_or_incomplete")
+        self.assertFalse(campaign["p0_vision_evidence"]["verified"])
 
     def test_application_config_and_campaign_retrieval_are_auditable(self):
         secret = "sk-config-secret-must-not-be-returned"

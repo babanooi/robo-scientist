@@ -98,7 +98,10 @@ export ARMPI_WRAPPER=/home/ubuntu/armpi_tasks/run_final_dynamic_pick_place.sh
 export ARMPI_STOP_COMMAND='REPLACE WITH THE VERIFIED SOFTWARE STOP COMMAND'
 ```
 
-The backend refuses real execution while `ARMPI_STOP_COMMAND` is missing. It
+The backend refuses real execution while `ARMPI_STOP_COMMAND` is missing or is
+still a `REPLACE_WITH...` placeholder. The no-motion verifier also calls
+`POST /stop` once while idle and requires `stopped=true`; a non-empty command
+string alone is not readiness evidence. It
 requires both `numeric_safety_passed` and `preflight_passed`, and preserves the
 wrapper log. `pick_place_sequence_completed` is recorded only as action-chain
 evidence. Set `ARMPI_RESULT_EVALUATOR=module:function` to an actual
@@ -131,9 +134,9 @@ run_experiment(mode, plan, context) -> {
 
 The reference runner writes an experiment-scoped parameter JSON and requires
 the hardware wrapper to acknowledge its exact SHA256. Candidate preflight and
-execution both fail closed when the acknowledgement or executed-parameter
-evidence is missing. Candidates may change exactly one supported family from
-the P0 defaults.
+execution both fail closed unless `executed_parameters`, the parameter file,
+its canonical SHA256, and the preflight/pick-place digests all agree. Candidates
+may change exactly one supported family from the P0 defaults.
 
 For result evaluation, the built-in file evaluator can consume a result from a
 separate vision process:
@@ -143,9 +146,12 @@ export ARMPI_RESULT_EVALUATOR=roboscientist.hardware_bridge.result_file_evaluato
 export ARMPI_EVALUATION_TIMEOUT_S=60
 ```
 
-See `configs/evaluation_result_template.json`. A `POSE_OFFSET` result must carry
-signed `position_error_xyz_m`; a scalar error magnitude cannot determine a safe
-correction direction.
+See `configs/evaluation_result_template.json`. Every result must identify a
+non-empty `evaluator_version`. A result claiming `evaluator_type=vision` must
+also contain at least one existing absolute image or video evidence path. A `POSE_OFFSET`
+result must carry signed `position_error_xyz_m`; a scalar error magnitude cannot
+determine a safe correction direction. Runner metadata cannot supply or
+override evaluator provenance.
 
 `armpi_backend.py` remains a legacy alternative for installations that really
 have the separately documented `~/my_armpi/move_to_pose.py`,

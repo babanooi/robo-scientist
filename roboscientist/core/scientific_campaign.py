@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Mapping, Optional
 
-from roboscientist.ai import QwenCallError, QwenClient, QwenConfigurationError
+from roboscientist.ai import QwenClient, QwenConfigurationError
 from roboscientist.core.optimizer import candidate_from_failure
+from roboscientist.core.planner import build_plan
 from roboscientist.core.task_parser import parse_task
 from roboscientist.schemas import (
     ErrorCode,
@@ -24,6 +25,13 @@ from roboscientist.schemas import (
     new_id,
 )
 from roboscientist.storage import ExperimentStore
+
+
+EVALUATOR_VERSION_KEYS = (
+    "evaluator_version",
+    "evaluation_version",
+    "vision_evaluator_version",
+)
 
 
 class ScientificCampaignError(RuntimeError):
@@ -128,8 +136,11 @@ def _same_condition(p0: Mapping[str, Any], p1: Mapping[str, Any]) -> dict:
         "task.target_object",
         "task.target_zone",
         "target_pose",
+        "target_pose.calibration_version",
         "destination_pose",
+        "timeout_s",
         "safety_constraints",
+        "evaluator_version",
     )
 
     def get(record: Mapping[str, Any], path: str) -> Any:
@@ -145,7 +156,78 @@ def _same_condition(p0: Mapping[str, Any], p1: Mapping[str, Any]) -> dict:
         for field in fields
         if get(p0, field) != get(p1, field)
     ]
+    if get(p0, "expected_data_source") == "real_arm":
+        for field in ("target_pose.calibration_version", "evaluator_version"):
+            if not get(p0, field) or not get(p1, field):
+                if not any(item["field"] == field for item in differences):
+                    differences.append(
+                        {
+                            "field": field,
+                            "p0": get(p0, field),
+                            "p1": get(p1, field),
+                            "reason": "required real-arm immutable condition is missing",
+                        }
+                    )
     return {"verified": not differences, "fields_checked": list(fields), "differences": differences}
+
+
+def _evaluator_version(artifacts: Mapping[str, Any]) -> Optional[str]:
+    for key in EVALUATOR_VERSION_KEYS:
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _configured_evaluator_version(adapter: Any, fallback: Optional[str]) -> Optional[str]:
+    """Read an explicitly pinned evaluator version when the adapter exposes one."""
+    for source in (adapter, getattr(adapter, "profile", None)):
+        if source is None:
+            continue
+        for key in EVALUATOR_VERSION_KEYS:
+            value = getattr(source, key, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return fallback
+
+
+def _condition_record(plan: Mapping[str, Any], evaluator_version: Optional[str]) -> dict:
+    record = dict(plan)
+    record["evaluator_version"] = evaluator_version
+    return record
+
+
+def _real_arm_vision_evidence(
+    result: ExperimentResult, expected_evaluator_version: Optional[str]
+) -> dict:
+    artifacts = result.artifacts
+    actual_version = _evaluator_version(artifacts)
+    evidence_files = sorted(
+        str(value).strip()
+        for key, value in artifacts.items()
+        if key.startswith("evaluation_evidence_") and str(value).strip()
+    )
+    missing = []
+    if artifacts.get("evaluator_type") != "vision":
+        missing.append("evaluator_type=vision")
+    if not str(artifacts.get("evaluation_file", "")).strip():
+        missing.append("evaluation_file")
+    if not evidence_files:
+        missing.append("evaluation_evidence_*")
+    if actual_version is None:
+        missing.append("evaluator_version")
+    elif expected_evaluator_version and actual_version != expected_evaluator_version:
+        missing.append(
+            f"evaluator_version={expected_evaluator_version} (received {actual_version})"
+        )
+    return {
+        "verified": not missing,
+        "expected_evaluator_version": expected_evaluator_version,
+        "actual_evaluator_version": actual_version,
+        "evaluation_file": artifacts.get("evaluation_file"),
+        "evidence_files": evidence_files,
+        "missing_or_mismatched": missing,
+    }
 
 
 def _strategy_matches(
@@ -203,12 +285,16 @@ class ScientificCampaignRunner:
         )
         return f"campaigns/{campaign_id}/qwen/{phase}_metadata.json"
 
-    def _write_qwen_error(self, campaign_id: str, phase: str, error: Exception) -> None:
+    def _write_qwen_error(self, campaign_id: str, phase: str, code: str) -> None:
+        request_ref = f"campaigns/{campaign_id}/qwen/{phase}_metadata.json"
         payload = {
-            "error": str(error),
-            "request": _scrub(getattr(error, "request_payload", {})),
-            "response": _scrub(getattr(error, "response_payload", {})),
-            "metadata": _scrub(getattr(error, "metadata", {})),
+            "error": code,
+            "metadata": {
+                "error_code": code,
+                "stage": phase,
+                "campaign_id": campaign_id,
+                "request_ref": request_ref,
+            },
         }
         self.store.write_campaign_qwen_evidence(campaign_id, phase, payload)
 
@@ -265,10 +351,14 @@ class ScientificCampaignRunner:
                         output_model=ScientificPlanDraft,
                         schema_name="scientific_plan_draft",
                     )
-                except (QwenCallError, QwenConfigurationError) as error:
-                    self._write_qwen_error(campaign_id, "planning", error)
+                except Exception as error:
+                    code = "QWEN_PLANNING_FAILED"
+                    self._write_qwen_error(campaign_id, "planning", code)
                     raise ScientificCampaignError(
-                        str(error), code="QWEN_PLANNING_FAILED", stage="planning", campaign_id=campaign_id
+                        "Qwen planning failed",
+                        code=code,
+                        stage="planning",
+                        campaign_id=campaign_id,
                     ) from error
                 scientific_plan = call.output
                 qwen_ref = self._write_qwen_call(campaign_id, "planning", call)
@@ -314,10 +404,14 @@ class ScientificCampaignRunner:
                         output_model=FeedbackAdjustmentDraft,
                         schema_name="feedback_adjustment_draft",
                     )
-                except (QwenCallError, QwenConfigurationError) as error:
-                    self._write_qwen_error(campaign_id, "adjustment", error)
+                except Exception as error:
+                    code = "QWEN_ADJUSTMENT_FAILED"
+                    self._write_qwen_error(campaign_id, "adjustment", code)
                     raise ScientificCampaignError(
-                        str(error), code="QWEN_ADJUSTMENT_FAILED", stage="adjustment", campaign_id=campaign_id
+                        "Qwen adjustment failed",
+                        code=code,
+                        stage="adjustment",
+                        campaign_id=campaign_id,
                     ) from error
                 adjustment = call.output
                 feedback_ref = self._write_qwen_call(campaign_id, "adjustment", call)
@@ -334,6 +428,18 @@ class ScientificCampaignRunner:
                 "strategy_matches": strategy_matches,
             }
             p1_record = None
+            same_condition = None
+            p1_accepted = False
+            p0_evaluator_version = _evaluator_version(p0.artifacts)
+            expected_p1_evaluator_version = _configured_evaluator_version(
+                orchestrator.adapter, p0_evaluator_version
+            )
+            p0_vision_evidence = None
+            if p0.data_source == "real_arm":
+                p0_vision_evidence = _real_arm_vision_evidence(
+                    p0, expected_p1_evaluator_version
+                )
+                campaign["p0_vision_evidence"] = p0_vision_evidence
             if p0.failure is None:
                 decision.update(status="stopped", reason="P0 has no structured failure; no P1 is necessary")
                 status = "stopped"
@@ -356,33 +462,111 @@ class ScientificCampaignRunner:
             elif not auto_run_p1:
                 decision.update(status="awaiting_confirmation", reason="auto_run_p1=false")
                 status = "blocked"
-            elif p0.data_source == "real_arm" and p0.artifacts.get("evaluator_type") != "vision":
+            elif p0_vision_evidence is not None and not p0_vision_evidence["verified"]:
                 decision.update(
                     status="manual_review_required",
-                    reason="real-arm automatic continuation requires evaluator_type=vision",
+                    reason=(
+                        "P0 vision evidence is incomplete: "
+                        + ", ".join(
+                            p0_vision_evidence["missing_or_mismatched"]
+                        )
+                    ),
                 )
                 status = "blocked"
             else:
-                p1 = orchestrator.run(
-                    task.source_text,
+                prospective_p1_plan = build_plan(
+                    task,
                     candidate,
-                    task=task,
+                    orchestrator.adapter.name,
+                    orchestrator.constraints,
+                    scene_id=orchestrator.scene_id,
+                    data_source=orchestrator.adapter.data_source,
+                    target_pose=orchestrator.target_pose,
+                    destination_pose=orchestrator.destination_pose,
+                    execution_scenario=orchestrator.execution_scenario,
+                    planning_source="qwen" if use_qwen else "deterministic",
                     scientific_plan=scientific_plan,
                     feedback_adjustment=adjustment,
-                    planning_source="qwen" if use_qwen else "deterministic",
                     qwen_invocation_ref=feedback_ref,
-                    allow_candidate=False,
                 )
-                p1_record = self._record(self.store, p1)
-                campaign["records"].append(p1_record)
-                decision.update(status="p1_executed", reason="all deterministic and evaluator gates passed")
-                status = "completed"
+                p0_conditions = _condition_record(
+                    p0_record["plan"], p0_evaluator_version
+                )
+                prospective_p1_conditions = _condition_record(
+                    prospective_p1_plan.model_dump(mode="json"),
+                    expected_p1_evaluator_version,
+                )
+                same_condition = _same_condition(
+                    p0_conditions, prospective_p1_conditions
+                )
+                same_condition["phase"] = "pre_p1"
+                if not same_condition["verified"]:
+                    decision.update(
+                        status="manual_review_required",
+                        reason="immutable conditions changed or are incomplete before P1",
+                    )
+                    status = "blocked"
+                else:
+                    p1 = orchestrator.run(
+                        task.source_text,
+                        candidate,
+                        task=task,
+                        scientific_plan=scientific_plan,
+                        feedback_adjustment=adjustment,
+                        planning_source="qwen" if use_qwen else "deterministic",
+                        qwen_invocation_ref=feedback_ref,
+                        allow_candidate=False,
+                    )
+                    p1_record = self._record(self.store, p1)
+                    campaign["records"].append(p1_record)
+                    actual_p1_evaluator_version = _evaluator_version(p1.artifacts)
+                    same_condition = _same_condition(
+                        p0_conditions,
+                        _condition_record(
+                            p1_record["plan"], actual_p1_evaluator_version
+                        ),
+                    )
+                    same_condition["phase"] = "post_p1"
+                    if not same_condition["verified"]:
+                        decision.update(
+                            status="manual_review_required",
+                            reason="P1 actual immutable conditions differ from P0",
+                        )
+                        status = "blocked"
+                    elif p1.data_source == "real_arm":
+                        vision_evidence = _real_arm_vision_evidence(
+                            p1, p0_evaluator_version
+                        )
+                        campaign["p1_vision_evidence"] = vision_evidence
+                        if not vision_evidence["verified"]:
+                            decision.update(
+                                status="manual_review_required",
+                                reason=(
+                                    "P1 vision evidence is incomplete: "
+                                    + ", ".join(
+                                        vision_evidence["missing_or_mismatched"]
+                                    )
+                                ),
+                            )
+                            status = "blocked"
+                        else:
+                            decision.update(
+                                status="p1_executed",
+                                reason="all deterministic and evaluator gates passed",
+                            )
+                            status = "completed"
+                            p1_accepted = True
+                    else:
+                        decision.update(
+                            status="p1_executed",
+                            reason="all deterministic and evaluator gates passed",
+                        )
+                        status = "completed"
+                        p1_accepted = True
 
             campaign["decision"] = decision
-            if p1_record is not None:
-                campaign["same_condition"] = _same_condition(
-                    campaign["records"][0]["plan"], p1_record["plan"]
-                )
+            if same_condition is not None:
+                campaign["same_condition"] = same_condition
             else:
                 campaign["same_condition"] = {
                     "verified": False,
@@ -392,7 +576,7 @@ class ScientificCampaignRunner:
                 }
             campaign["status"] = status
             campaign["classification"] = self._classification(
-                campaign, p0.data_source, use_qwen, p1_record is not None
+                campaign, p0.data_source, use_qwen, p1_accepted
             )
         except ScientificCampaignError:
             campaign.setdefault("decision", {"status": "failed", "reason": "Qwen call failed"})

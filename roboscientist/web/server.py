@@ -20,7 +20,7 @@ from roboscientist.adapters import (
 from roboscientist.ai import QwenClient, QwenConfigurationError
 from roboscientist.core.orchestrator import Orchestrator
 from roboscientist.core.scientific_campaign import ScientificCampaignError, ScientificCampaignRunner
-from roboscientist.schemas import ExecutionMode, SkillVersion
+from roboscientist.schemas import ExecutionMode, SkillVersion, new_id
 from roboscientist.storage import ExperimentStore
 
 
@@ -262,16 +262,50 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def _body(self) -> Dict:
-        length = int(self.headers.get("Content-Length", "0"))
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
-        except json.JSONDecodeError as error:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("Content-Length must be an integer") from error
+        if length <= 0:
+            raise ValueError("request body is required")
+        if length > 1_000_000:
+            raise ValueError("request body is too large")
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ValueError("request body must be JSON") from error
+        if not isinstance(body, dict):
+            raise ValueError("request body must be a JSON object")
+        return body
 
     def _error(self, status: HTTPStatus, message: str) -> None:
         self._send_json(status, {"error": message if isinstance(message, dict) else {"message": message}})
 
+    def _internal_error(self, request_id: str, error: Exception) -> None:
+        self.log_error(
+            "unhandled request failure request_id=%s error_type=%s",
+            request_id,
+            type(error).__name__,
+        )
+        self._send_json(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            {
+                "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "unexpected server error",
+                    "request_id": request_id,
+                }
+            },
+        )
+
     def do_GET(self) -> None:
+        request_id = new_id("request")
+        try:
+            self._do_GET()
+        except Exception as error:
+            self._internal_error(request_id, error)
+
+    def _do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         if path in ("/", "/index.html"):
@@ -316,6 +350,7 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
         self._error(HTTPStatus.NOT_FOUND, "route not found")
 
     def do_POST(self) -> None:
+        request_id = new_id("request")
         try:
             body = self._body()
             if self.path == "/api/tasks":
@@ -359,6 +394,8 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
             )
         except FileNotFoundError as error:
             self._error(HTTPStatus.NOT_FOUND, str(error))
+        except Exception as error:
+            self._internal_error(request_id, error)
 
 
 def create_server(

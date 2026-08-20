@@ -76,6 +76,9 @@ def evaluate_result_file(
     evaluator_type = payload.get("evaluator_type")
     if evaluator_type not in EVALUATOR_TYPES:
         return _failure("evaluator_type must be vision, operator, or hybrid", result_file)
+    evaluator_version = payload.get("evaluator_version")
+    if not isinstance(evaluator_version, str) or not evaluator_version.strip():
+        return _failure("evaluator_version must be a non-empty string", result_file)
     outcome = payload.get("outcome")
     if not isinstance(outcome, dict) or any(type(outcome.get(name)) is not bool for name in REQUIRED_OUTCOMES):
         return _failure("all three physical outcomes must be explicit booleans", result_file)
@@ -104,16 +107,38 @@ def evaluate_result_file(
     ):
         return _failure("confidence must be between 0 and 1", result_file)
 
+    evidence_files = payload.get("evidence", [])
+    valid_evidence = []
+    invalid_evidence = []
+    if isinstance(evidence_files, list):
+        for value in evidence_files:
+            if not isinstance(value, str) or not value.strip():
+                invalid_evidence.append(str(value))
+                continue
+            path = Path(value)
+            if not path.is_absolute() or not path.is_file():
+                invalid_evidence.append(value)
+                continue
+            valid_evidence.append(str(path))
+    if evaluator_type == "vision" and not valid_evidence:
+        return _failure(
+            "vision evaluation requires an existing absolute image or video evidence file",
+            result_file,
+        )
+    if evaluator_type == "vision" and invalid_evidence:
+        return _failure(
+            "vision evaluation contains missing or invalid evidence files",
+            result_file,
+        )
+
     result_artifacts = {
         "evaluation_file": str(result_file),
         "evaluation_request": str(request_file),
         "evaluator_type": str(evaluator_type),
+        "evaluator_version": evaluator_version.strip(),
     }
-    evidence_files = payload.get("evidence", [])
-    if isinstance(evidence_files, list):
-        for index, value in enumerate(evidence_files):
-            if isinstance(value, str):
-                result_artifacts[f"evaluation_evidence_{index + 1}"] = value
+    for index, value in enumerate(valid_evidence):
+        result_artifacts[f"evaluation_evidence_{index + 1}"] = value
     metrics = {}
     if position_error is not None:
         metrics["position_error_m"] = float(position_error)
@@ -139,6 +164,8 @@ def evaluate_result_file(
         return {
             "status": "failed",
             "hardware_status": "real_arm_physical_outcome_evaluated",
+            "evaluator_type": evaluator_type,
+            "evaluator_version": evaluator_version.strip(),
             "outcome": outcome,
             "failure": {
                 "code": failure_code,
@@ -151,6 +178,8 @@ def evaluate_result_file(
     return {
         "status": "succeeded",
         "hardware_status": "real_arm_physical_outcome_verified",
+        "evaluator_type": evaluator_type,
+        "evaluator_version": evaluator_version.strip(),
         "outcome": outcome,
         "metrics": metrics,
         "artifacts": result_artifacts,

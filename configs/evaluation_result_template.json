@@ -1,6 +1,7 @@
 {
   "experiment_id": "REPLACE_WITH_EXPERIMENT_ID",
   "evaluator_type": "vision",
+  "evaluator_version": "REPLACE_WITH_EVALUATOR_VERSION",
   "confidence": 0.95,
   "outcome": {
     "object_grasped": true,

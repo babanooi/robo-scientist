@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -90,18 +92,47 @@ class ArmPiFinalWrapperBackendTests(unittest.TestCase):
         self.assertFalse(result["approved"])
         self.assertIn("target is outside the configured workspace", result["reasons"])
 
+    def test_placeholder_stop_and_calibration_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self.fixture(directory)
+            environment["ARMPI_STOP_COMMAND"] = "REPLACE_WITH_VERIFIED_STOP"
+            unsafe_request = request()
+            unsafe_request["target_pose"]["calibration_version"] = (
+                "REPLACE_WITH_VERIFIED_CALIBRATION"
+            )
+            with patch.dict(os.environ, environment, clear=True):
+                backend = ArmPiFinalWrapperBackend()
+                health = backend.health()
+                result = backend.preflight(unsafe_request)
+        self.assertFalse(health["available"])
+        self.assertFalse(health["stop_available"])
+        self.assertFalse(result["approved"])
+        self.assertTrue(any("calibration" in reason for reason in result["reasons"]))
+
     def test_parameterized_runner_must_echo_applied_candidate_parameters(self):
         runner = types.ModuleType("fixture_experiment_runner")
-        runner.run = lambda mode, plan, context: {
-            "returncode": 0,
-            "output": (
-                "STATUS: numeric_safety_passed\nSTATUS: preflight_passed\n"
-                if mode == "check"
-                else "STATUS: pick_place_sequence_completed\n"
-            ),
-            "executed_parameters": plan["skill"]["parameters"],
-            "execution_profile": "fixture_parameterized_runner",
-        }
+        def run(mode, plan, context):
+            parameters = plan["skill"]["parameters"]
+            payload = json.dumps(
+                parameters, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+            ).encode("utf-8")
+            parameter_file = Path(context["run_dir"]) / "skill_parameters.json"
+            parameter_file.write_bytes(payload)
+            return {
+                "returncode": 0,
+                "output": (
+                    "STATUS: numeric_safety_passed\nSTATUS: preflight_passed\n"
+                    if mode == "check"
+                    else "STATUS: pick_place_sequence_completed\n"
+                ),
+                "executed_parameters": parameters,
+                "execution_profile": "fixture_parameterized_runner",
+                "artifacts": {
+                    "skill_parameters": str(parameter_file),
+                    "skill_parameters_sha256": hashlib.sha256(payload).hexdigest(),
+                },
+            }
+        runner.run = run
         evaluator = types.ModuleType("fixture_candidate_evaluator")
         evaluator.evaluate = lambda plan, actions, evidence: {
             "status": "succeeded",
@@ -128,6 +159,7 @@ class ArmPiFinalWrapperBackendTests(unittest.TestCase):
                 result = backend.execute_pick_place(candidate)
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["artifacts"]["execution_profile"], "fixture_parameterized_runner")
+        self.assertIn("skill_parameters_sha256", result["artifacts"])
 
     def test_parameterized_runner_without_parameter_evidence_is_rejected(self):
         runner = types.ModuleType("fixture_bad_runner")
@@ -146,6 +178,66 @@ class ArmPiFinalWrapperBackendTests(unittest.TestCase):
                 )
         self.assertFalse(result["approved"])
         self.assertTrue(any("did not prove" in reason for reason in result["reasons"]))
+
+    def test_parameterized_runner_with_wrong_digest_is_rejected(self):
+        runner = types.ModuleType("fixture_wrong_digest_runner")
+
+        def run(mode, plan, context):
+            parameters = plan["skill"]["parameters"]
+            payload = json.dumps(
+                parameters, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+            ).encode("utf-8")
+            parameter_file = Path(context["run_dir"]) / "skill_parameters.json"
+            parameter_file.write_bytes(payload)
+            return {
+                "returncode": 0,
+                "output": "STATUS: numeric_safety_passed\nSTATUS: preflight_passed\n",
+                "executed_parameters": parameters,
+                "artifacts": {
+                    "skill_parameters": str(parameter_file),
+                    "skill_parameters_sha256": "0" * 64,
+                },
+            }
+
+        runner.run = run
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self.fixture(directory)
+            environment["ARMPI_EXPERIMENT_RUNNER"] = "fixture_wrong_digest_runner:run"
+            with patch.dict(sys.modules, {"fixture_wrong_digest_runner": runner}), patch.dict(
+                os.environ, environment, clear=True
+            ):
+                result = ArmPiFinalWrapperBackend().preflight(
+                    request("p0-candidate-1", (0.005, 0.0, 0.0))
+                )
+        self.assertFalse(result["approved"])
+        self.assertTrue(any("SHA256" in reason for reason in result["reasons"]))
+
+    def test_vision_evaluator_without_visual_evidence_is_rejected(self):
+        evaluator = types.ModuleType("fixture_unproven_vision_evaluator")
+        evaluator.evaluate = lambda plan, actions, evidence: {
+            "status": "succeeded",
+            "evaluator_type": "vision",
+            "evaluator_version": "fixture-v1",
+            "outcome": {
+                "object_grasped": True,
+                "object_lifted": True,
+                "object_placed": True,
+            },
+            "artifacts": {"evaluation_file": "fixture://evaluation.json"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self.fixture(directory)
+            environment["ARMPI_RESULT_EVALUATOR"] = (
+                "fixture_unproven_vision_evaluator:evaluate"
+            )
+            with patch.dict(
+                sys.modules,
+                {"fixture_unproven_vision_evaluator": evaluator},
+            ), patch.dict(os.environ, environment, clear=True):
+                result = ArmPiFinalWrapperBackend().execute_pick_place(request())
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failure"]["code"], "HARDWARE_UNVERIFIED")
+        self.assertIn("image or video evidence", result["failure"]["message"])
 
     def test_candidate_cannot_change_two_parameter_families(self):
         runner = types.ModuleType("fixture_multifamily_runner")

@@ -4,6 +4,7 @@ The wrapper proves that a motion sequence ran. A separate result evaluator is
 still required before the upper application may record a successful grasp.
 """
 
+import hashlib
 import importlib
 import json
 import math
@@ -60,6 +61,11 @@ class ArmPiFinalWrapperBackend:
         return json.dumps(request, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
     @staticmethod
+    def _is_placeholder(value: Any) -> bool:
+        text = str(value or "").strip().upper()
+        return not text or "REPLACE_WITH" in text or "REPLACE WITH" in text or "替换" in text
+
+    @staticmethod
     def _inside_workspace(target: Mapping[str, Any], constraints: Mapping[str, Any]) -> bool:
         minimum = constraints.get("workspace_min_m", ())
         maximum = constraints.get("workspace_max_m", ())
@@ -79,7 +85,10 @@ class ArmPiFinalWrapperBackend:
             problems.append(f"task directory does not exist: {self.task_dir}")
         if not self.wrapper.is_file():
             problems.append(f"wrapper does not exist: {self.wrapper}")
-        if not self.stop_command:
+        stop_configured = bool(self.stop_command) and not any(
+            self._is_placeholder(part) for part in self.stop_command
+        )
+        if not stop_configured:
             problems.append("ARMPI_STOP_COMMAND is not configured")
         if self.experiment_runner_spec:
             try:
@@ -98,7 +107,7 @@ class ArmPiFinalWrapperBackend:
             "backend": "armpi_final_red_cuboid_wrapper",
             "hardware_status": "verified_baseline_ready" if not problems else "configuration_incomplete",
             "wrapper": str(self.wrapper),
-            "stop_available": bool(self.stop_command),
+            "stop_available": stop_configured,
             "parameterized_skill_configured": bool(self.experiment_runner_spec) and not runner_error,
             "result_evaluator_configured": bool(self.result_evaluator_spec) and not evaluator_error,
             "message": "; ".join(problems),
@@ -207,14 +216,96 @@ class ArmPiFinalWrapperBackend:
         except (TypeError, ValueError):
             return False
 
+    @staticmethod
+    def _canonical_parameters(value: Any) -> Tuple[bytes, str]:
+        if not isinstance(value, Mapping):
+            raise ValueError("Skill parameters must be a mapping")
+        required = {
+            "grasp_offset_m", "approach_height_m", "transit_height_m", "speed_m_s",
+        }
+        if set(value) != required:
+            raise ValueError("Skill parameters contain missing or unsupported keys")
+        offset = value.get("grasp_offset_m")
+        if not isinstance(offset, (list, tuple)) or len(offset) != 3:
+            raise ValueError("grasp_offset_m must contain three values")
+        normalized = {
+            "grasp_offset_m": [float(item) for item in offset],
+            "approach_height_m": float(value["approach_height_m"]),
+            "transit_height_m": float(value["transit_height_m"]),
+            "speed_m_s": float(value["speed_m_s"]),
+        }
+        payload = json.dumps(
+            normalized, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+        ).encode("utf-8")
+        return payload, hashlib.sha256(payload).hexdigest()
+
     def _parameter_evidence_reason(
-        self, request: Mapping[str, Any], metadata: Mapping[str, Any]
+        self,
+        request: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+        *,
+        expected_preflight_digest: Optional[str] = None,
     ) -> Optional[str]:
         if not self._uses_parameterized_runner(request):
             return None
         requested = request.get("skill", {}).get("parameters", {})
-        if not self._same_parameters(metadata.get("executed_parameters"), requested):
+        try:
+            expected_payload, expected_digest = self._canonical_parameters(requested)
+            executed_payload, _ = self._canonical_parameters(metadata.get("executed_parameters"))
+        except (TypeError, ValueError) as error:
+            return f"experiment runner did not prove the applied Skill parameters: {error}"
+        if executed_payload != expected_payload:
             return "experiment runner did not prove that the requested Skill parameters were applied"
+        artifacts = metadata.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return "experiment runner returned no parameter evidence artifacts"
+        digest = artifacts.get("skill_parameters_sha256")
+        if digest != expected_digest:
+            return "experiment runner parameter SHA256 does not match the requested Skill parameters"
+        if expected_preflight_digest is not None and digest != expected_preflight_digest:
+            return "pick-place parameter SHA256 does not match the approved preflight SHA256"
+        parameter_file_value = artifacts.get("skill_parameters")
+        if not isinstance(parameter_file_value, str) or not parameter_file_value:
+            return "experiment runner returned no skill_parameters file"
+        try:
+            parameter_payload = Path(parameter_file_value).read_bytes()
+        except OSError as error:
+            return f"cannot read experiment runner parameter file: {error}"
+        if parameter_payload != expected_payload:
+            return "experiment runner parameter file does not match the requested Skill parameters"
+        return None
+
+    @staticmethod
+    def _parameter_artifacts(metadata: Mapping[str, Any]) -> Dict[str, str]:
+        artifacts = metadata.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return {}
+        return {
+            key: str(artifacts[key])
+            for key in ("skill_parameters", "skill_parameters_sha256")
+            if artifacts.get(key) is not None
+        }
+
+    @staticmethod
+    def _vision_evidence_reason(evaluation: Mapping[str, Any]) -> Optional[str]:
+        if evaluation.get("evaluator_type") != "vision":
+            return None
+        version = evaluation.get("evaluator_version")
+        if not isinstance(version, str) or not version.strip():
+            return "vision evaluator did not report evaluator_version"
+        artifacts = evaluation.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return "vision evaluator returned no evidence artifacts"
+        if not isinstance(artifacts.get("evaluation_file"), str) or not artifacts.get("evaluation_file"):
+            return "vision evaluator returned no evaluation_file"
+        visual_evidence = [
+            value for key, value in artifacts.items()
+            if str(key).startswith("evaluation_evidence_")
+            and isinstance(value, str)
+            and value.strip()
+        ]
+        if not visual_evidence:
+            return "vision evaluator returned no image or video evidence"
         return None
 
     def _static_reasons(self, request: Mapping[str, Any]) -> list:
@@ -231,8 +322,9 @@ class ArmPiFinalWrapperBackend:
         destination = request.get("destination_pose", {})
         if target.get("frame_id") != "base" or destination.get("frame_id") != "base":
             reasons.append("target and destination must use the base frame")
-        if not target.get("calibration_version"):
-            reasons.append("target has no calibration version")
+        calibration_version = target.get("calibration_version")
+        if self._is_placeholder(calibration_version):
+            reasons.append("target has no verified calibration version")
         if target.get("confidence", 0) < constraints.get("minimum_confidence", 1):
             reasons.append("target confidence is below the configured threshold")
         if not self._inside_workspace(target, constraints):
@@ -307,12 +399,14 @@ class ArmPiFinalWrapperBackend:
         if parameter_reason:
             reasons.append(parameter_reason)
 
+        result_artifacts = {"wrapper_check_log": str(log_path)}
+        result_artifacts.update(self._parameter_artifacts(metadata))
         result = {
             "approved": not reasons,
             "checks": ["wrapper_check", "numeric_safety", "ik_preflight", "fixed_destination"],
             "reasons": reasons,
             "duration_s": duration_s,
-            "artifacts": {"wrapper_check_log": str(log_path)},
+            "artifacts": result_artifacts,
             "detected_target": parsed["target"],
             "execution_profile": metadata.get("execution_profile", "parameterized_runner"),
             "executed_parameters": metadata.get("executed_parameters"),
@@ -396,7 +490,12 @@ class ArmPiFinalWrapperBackend:
         }
         runner_artifacts = metadata.get("artifacts", {})
         if isinstance(runner_artifacts, Mapping):
-            artifacts.update({str(key): str(value) for key, value in runner_artifacts.items()})
+            reserved = {"evaluator_type", "evaluator_version", "evaluation_file"}
+            artifacts.update({
+                str(key): str(value)
+                for key, value in runner_artifacts.items()
+                if str(key) not in reserved and not str(key).startswith("evaluation_evidence_")
+            })
         if parsed["target"]:
             artifacts["detected_target"] = json.dumps(parsed["target"], ensure_ascii=True, sort_keys=True)
         joint_csv = self._latest_evidence("joint_states_session.csv", started_wall)
@@ -422,7 +521,13 @@ class ArmPiFinalWrapperBackend:
             result = self._failed(action, "TIMEOUT", "wrapper execution timed out", artifacts)
             result["metrics"].update(metrics)
             return result
-        parameter_reason = self._parameter_evidence_reason(request, metadata)
+        parameter_reason = self._parameter_evidence_reason(
+            request,
+            metadata,
+            expected_preflight_digest=check.get("artifacts", {}).get(
+                "skill_parameters_sha256"
+            ),
+        )
         if completed is None or completed.returncode != 0 or not parsed["sequence_completed"] or parameter_reason:
             message = (
                 f"wrapper exited with code {completed.returncode if completed else 'unknown'}"
@@ -474,6 +579,28 @@ class ArmPiFinalWrapperBackend:
                 "artifacts": artifacts,
             }
 
+        vision_evidence_reason = self._vision_evidence_reason(evaluation)
+        if vision_evidence_reason:
+            evaluation_artifacts = evaluation.get("artifacts", {})
+            if isinstance(evaluation_artifacts, Mapping):
+                artifacts.update({
+                    str(key): str(value)
+                    for key, value in evaluation_artifacts.items()
+                })
+            return {
+                "status": "failed",
+                "hardware_status": "motion_completed_result_unverified",
+                "actions": [action],
+                "outcome": dict(evaluation.get("outcome", {})),
+                "failure": {
+                    "code": "HARDWARE_UNVERIFIED",
+                    "stage": "evaluation",
+                    "message": vision_evidence_reason,
+                },
+                "metrics": metrics,
+                "artifacts": artifacts,
+            }
+
         response = dict(evaluation)
         response.setdefault("actions", [action])
         response.setdefault("hardware_status", "real_arm_wrapper_execution_evaluated")
@@ -487,6 +614,9 @@ class ArmPiFinalWrapperBackend:
         evaluator_type = response.get("evaluator_type")
         if evaluator_type:
             response_artifacts["evaluator_type"] = str(evaluator_type)
+        evaluator_version = response.get("evaluator_version")
+        if evaluator_version:
+            response_artifacts["evaluator_version"] = str(evaluator_version)
         outcome = response.get("outcome", {})
         if response.get("status") == "succeeded" and not all(
             outcome.get(field) is True
@@ -501,7 +631,7 @@ class ArmPiFinalWrapperBackend:
         return response
 
     def stop(self, request: Mapping[str, Any]) -> Dict[str, Any]:
-        if not self.stop_command:
+        if not self.stop_command or any(self._is_placeholder(part) for part in self.stop_command):
             return {"stopped": False, "message": "ARMPI_STOP_COMMAND is not configured"}
         try:
             completed = subprocess.run(

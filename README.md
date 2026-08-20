@@ -113,7 +113,8 @@ described in [硬件组 GitHub 拉取与实机闭环验收](docs/2026-08-20_硬�
 The real campaign is eligible for an autonomous P1 only when all of the
 following are true: `mode=real_arm`; P0 and P1 use the same scene, target,
 destination, calibration, evaluator version, and acceptance conditions; both
-rounds are evaluated by `evaluator_type=vision`; P1 changes exactly one allowed
+rounds are evaluated by `evaluator_type=vision`, include a pinned evaluator
+version, an experiment-scoped evaluation file, and image/video evidence; P1 changes exactly one allowed
 parameter family; and the parameterized wrapper acknowledges the identical
 canonical `skill_parameters.json` SHA256 during both `check` and `pick-place`.
 `operator` or `hybrid` evidence may support supervised hardware debugging, but
