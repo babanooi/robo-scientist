@@ -1,5 +1,7 @@
 import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from urllib.error import URLError
 from unittest.mock import patch
@@ -127,12 +129,32 @@ class QwenPlannerTests(unittest.TestCase):
         )
 
     def test_missing_key_is_explicit_when_qwen_is_required(self):
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {"ROBO_ENV_FILE": "/missing/roboscientist.env"}, clear=True):
             self.assertIsNone(QwenClient.from_env(required=False))
             with self.assertRaisesRegex(
                 QwenConfigurationError, "DASHSCOPE_API_KEY is not configured"
             ):
                 QwenClient.from_env(required=True)
+
+    def test_local_env_loads_only_qwen_settings_and_process_env_wins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                "DASHSCOPE_API_KEY=sk-local-test\n"
+                "QWEN_MODEL=qwen-local-test\n"
+                "IGNORED_SETTING=not-loaded\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"ROBO_ENV_FILE": str(env_path)}, clear=True):
+                client = QwenClient.from_env(required=True)
+                self.assertEqual(client.api_key, "sk-local-test")
+                self.assertEqual(client.model, "qwen-local-test")
+            with patch.dict(
+                os.environ,
+                {"ROBO_ENV_FILE": str(env_path), "QWEN_MODEL": "qwen-process-test"},
+                clear=True,
+            ):
+                self.assertEqual(QwenClient.from_env(required=True).model, "qwen-process-test")
 
     def test_transport_failure_preserves_auditable_error_without_secret(self):
         secret = "sk-test-transport-secret"

@@ -71,9 +71,11 @@ For low-level/local checks, the following routes remain available:
 
 ### Qwen / Bailian configuration
 
-Set these only in the process environment on the machine that runs the upper
-application. Never put the API key in Git, JSON evidence, screenshots, or a
-`.env` file that is uploaded with the experiment package:
+Set these in the process environment on the machine that runs the upper
+application. For local development, the ignored project-root `.env` file may
+contain the same four fields; process environment values take precedence. Never
+put the API key in Git, JSON evidence, screenshots, or any `.env` file that is
+uploaded with the experiment package:
 
 ```sh
 export DASHSCOPE_API_KEY='REDACTED_AT_HANDOFF'

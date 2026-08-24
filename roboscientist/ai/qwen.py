@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, Type
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -14,6 +15,12 @@ from pydantic import BaseModel, ValidationError
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_MODEL = "qwen3.7-plus"
+ENV_KEYS = (
+    "DASHSCOPE_API_KEY",
+    "DASHSCOPE_BASE_URL",
+    "QWEN_MODEL",
+    "QWEN_TIMEOUT_S",
+)
 
 
 def _utc_iso() -> str:
@@ -22,6 +29,34 @@ def _utc_iso() -> str:
 
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _local_qwen_settings() -> Dict[str, str]:
+    """Read only Qwen settings from an ignored local file, never execute it."""
+
+    configured_path = os.environ.get("ROBO_ENV_FILE")
+    path = Path(configured_path) if configured_path else Path(__file__).resolve().parents[2] / ".env"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    settings: Dict[str, str] = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, separator, value = line.partition("=")
+        name = name.strip()
+        if not separator or name not in ENV_KEYS:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        settings[name] = value
+    return settings
 
 
 class QwenConfigurationError(RuntimeError):
@@ -76,7 +111,10 @@ class QwenClient:
 
     @classmethod
     def from_env(cls, required: bool = False) -> Optional["QwenClient"]:
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        local_settings = _local_qwen_settings()
+        api_key = os.environ.get(
+            "DASHSCOPE_API_KEY", local_settings.get("DASHSCOPE_API_KEY", "")
+        ).strip()
         if not api_key:
             if required:
                 raise QwenConfigurationError(
@@ -84,15 +122,19 @@ class QwenClient:
                 )
             return None
         try:
-            timeout_s = float(os.environ.get("QWEN_TIMEOUT_S", "90"))
+            timeout_s = float(
+                os.environ.get("QWEN_TIMEOUT_S", local_settings.get("QWEN_TIMEOUT_S", "90"))
+            )
         except ValueError as error:
             raise QwenConfigurationError("QWEN_TIMEOUT_S must be numeric") from error
         if not 1 <= timeout_s <= 300:
             raise QwenConfigurationError("QWEN_TIMEOUT_S must be between 1 and 300")
         return cls(
             api_key=api_key,
-            base_url=os.environ.get("DASHSCOPE_BASE_URL", DEFAULT_BASE_URL),
-            model=os.environ.get("QWEN_MODEL", DEFAULT_MODEL),
+            base_url=os.environ.get(
+                "DASHSCOPE_BASE_URL", local_settings.get("DASHSCOPE_BASE_URL", DEFAULT_BASE_URL)
+            ),
+            model=os.environ.get("QWEN_MODEL", local_settings.get("QWEN_MODEL", DEFAULT_MODEL)),
             timeout_s=timeout_s,
         )
 
