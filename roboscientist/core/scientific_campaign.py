@@ -604,4 +604,20 @@ class ScientificCampaignRunner:
             return "autonomous_closed_loop"
         if data_source == "mock":
             return "mock_autonomous"
+        if data_source == "simulation":
+            # Keep the legacy ROS/Gazebo contract distinguishable from the
+            # project's self-contained deterministic workcell.  A verified
+            # virtual runtime is still not physical-robot evidence.
+            records = campaign.get("records") or []
+            verified = any(
+                (record.get("result") or {}).get("hardware_status")
+                == "simulation_runtime_verified"
+                or ((record.get("result") or {}).get("simulation") or {}).get(
+                    "runtime_status"
+                )
+                == "simulation_runtime_verified"
+                for record in records
+                if isinstance(record, Mapping)
+            )
+            return "simulation_software_virtual" if verified else "simulation_unverified"
         return "simulation_unverified"

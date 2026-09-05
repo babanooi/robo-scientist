@@ -2,6 +2,15 @@
 .venv/
 data/experiments/
 data/skills/
+data/campaigns/
+data/virtual_artifacts/
+data/browser_preview/
+data/preview_smoke/
+data/demo/
+data/preview/
+outputs/
+armpi_capability_bundle_*/
+armpi_capability_bundle_*.tar.gz
 configs/real_arm_profile.local.json
 .DS_Store
 node_modules/

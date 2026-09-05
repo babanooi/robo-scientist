@@ -35,6 +35,7 @@ class AdapterExecution:
         metrics=None,
         artifacts=None,
         simulation=None,
+        replay=None,
     ):
         self.actions = actions
         self.outcome = outcome
@@ -43,3 +44,4 @@ class AdapterExecution:
         self.metrics = metrics or {}
         self.artifacts = artifacts or {}
         self.simulation = simulation
+        self.replay = replay

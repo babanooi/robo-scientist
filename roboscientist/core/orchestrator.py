@@ -106,6 +106,7 @@ class Orchestrator:
                     status=execution.status, safety_check=safety, actions=[preflight] + execution.actions,
                     outcome=execution.outcome, failure=execution.failure, metrics=execution.metrics,
                     artifacts={"plan": "plan.json", **execution.artifacts}, simulation=execution.simulation,
+                    replay=execution.replay,
                 )
         result.failure_analysis = analyze(result)
         if result.failure_analysis:
@@ -114,7 +115,22 @@ class Orchestrator:
         vision_evidence_available = (
             result.data_source != "real_arm" or evaluator_type == "vision"
         )
-        if allow_candidate and not vision_evidence_available and result.failure:
+        simulation_evaluation = (
+            result.simulation.evaluation
+            if result.simulation is not None and isinstance(result.simulation.evaluation, dict)
+            else {}
+        )
+        nonrecoverable_collision = (
+            result.data_source == "simulation"
+            and result.simulation is not None
+            and result.simulation.collision_detected is True
+            and simulation_evaluation.get("scenario") == "collision"
+        )
+        if allow_candidate and nonrecoverable_collision:
+            result.artifacts["candidate_gate"] = (
+                "blocked: non-recoverable collision prediction requires human review"
+            )
+        elif allow_candidate and not vision_evidence_available and result.failure:
             result.artifacts["candidate_gate"] = (
                 "blocked: real_arm automatic feedback requires evaluator_type=vision; "
                 f"received {evaluator_type or 'missing'}"

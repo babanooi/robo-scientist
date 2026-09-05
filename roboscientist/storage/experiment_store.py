@@ -49,6 +49,12 @@ class ExperimentStore:
         self._write_new(path, payload)
         return path
 
+    def write_campaign_validation(self, campaign_id: str, payload: dict) -> Path:
+        """Persist an optional repeated P0/P1 validation without rewriting a campaign."""
+        path = self.root / "campaigns" / campaign_id / "validation.json"
+        self._write_new(path, payload)
+        return path
+
     def write_campaign_qwen_evidence(self, campaign_id: str, phase: str, payload: dict) -> dict:
         """Persist request, response and metadata without ever storing credentials."""
         if phase not in {"planning", "adjustment"}:
@@ -80,6 +86,11 @@ class ExperimentStore:
         if not path.is_file():
             raise FileNotFoundError(f"campaign does not exist: {campaign_id}")
         campaign = json.loads(path.read_text(encoding="utf-8"))
+        validation_path = path.parent / "validation.json"
+        if validation_path.exists():
+            campaign["validation"] = json.loads(
+                validation_path.read_text(encoding="utf-8")
+            )
         qwen_dir = path.parent / "qwen"
         qwen = {}
         if qwen_dir.is_dir():

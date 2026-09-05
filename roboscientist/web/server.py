@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,11 +16,16 @@ from roboscientist.adapters import (
     MockScenario,
     RealArmAdapter,
     SimulationAdapter,
+    VirtualSimulationAdapter,
     load_real_arm_profile,
 )
 from roboscientist.ai import QwenClient, QwenConfigurationError
 from roboscientist.core.orchestrator import Orchestrator
 from roboscientist.core.scientific_campaign import ScientificCampaignError, ScientificCampaignRunner
+from roboscientist.core.validation import run_repeated_validation
+from roboscientist.hardware_profiles import get_hardware_baseline, list_hardware_baselines
+from roboscientist.hardware_bridge.evidence_package_validator import validate_evidence_package
+from roboscientist.replay import ReplayService
 from roboscientist.schemas import ExecutionMode, SkillVersion, new_id
 from roboscientist.storage import ExperimentStore
 
@@ -28,6 +34,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 EXPERIMENT_PATH = re.compile(r"^/api/experiments/([A-Za-z0-9-]+)$")
 ITERATE_PATH = re.compile(r"^/api/experiments/([A-Za-z0-9-]+)/iterate$")
 CAMPAIGN_PATH = re.compile(r"^/api/campaigns/([A-Za-z0-9-]+)$")
+CAMPAIGN_VALIDATION_PATH = re.compile(r"^/api/campaigns/([A-Za-z0-9-]+)/validation$")
+REPLAY_PATH = re.compile(r"^/api/replay/([A-Za-z0-9._-]+)$")
+HARDWARE_BASELINE_PATH = re.compile(r"^/api/hardware/baselines/([A-Za-z0-9._-]+)$")
+
+
+HARDWARE_REFERENCE_SOURCE = "documented_hardware_reference"
+HARDWARE_EVIDENCE_SOURCE = "hardware_evidence_package"
+HARDWARE_EVIDENCE_ENV = "ROBO_HARDWARE_EVIDENCE_ROOT"
 
 
 class DemoApplication:
@@ -38,12 +52,25 @@ class DemoApplication:
         data_root: Union[Path, str] = "data",
         real_arm_profile: Optional[Union[Path, str]] = None,
         qwen_client: Optional[QwenClient] = None,
+        replay_source: Optional[Union[Path, str]] = None,
+        hardware_evidence_source: Optional[Union[Path, str]] = None,
+        virtual_simulation: bool = True,
     ):
         self.store = ExperimentStore(data_root)
         self.real_arm_profile = (
             load_real_arm_profile(real_arm_profile) if real_arm_profile else None
         )
         self.qwen_client = qwen_client
+        self.virtual_simulation = bool(virtual_simulation)
+        self.replay_service = ReplayService(replay_source)
+        configured_evidence = (
+            hardware_evidence_source
+            if hardware_evidence_source is not None
+            else os.environ.get(HARDWARE_EVIDENCE_ENV)
+        )
+        self.hardware_evidence_source = (
+            Path(configured_evidence).expanduser() if configured_evidence else None
+        )
 
     @staticmethod
     def _scenario(value: str) -> MockScenario:
@@ -62,7 +89,18 @@ class DemoApplication:
         if selected_mode is ExecutionMode.MOCK:
             return MockAdapter(self._scenario(scenario))
         if selected_mode is ExecutionMode.SIMULATION:
-            return SimulationAdapter()
+            # Public ``simulation`` mode uses the self-contained, deterministic
+            # virtual workcell.  The legacy SimulationAdapter remains an inert
+            # Gazebo/MoveIt2 contract and is intentionally not used as a
+            # source of fabricated execution results.
+            return (
+                VirtualSimulationAdapter(
+                    scenario,
+                    artifact_root=self.store.root / "virtual_artifacts",
+                )
+                if self.virtual_simulation
+                else SimulationAdapter()
+            )
         if self.real_arm_profile:
             return RealArmAdapter(self.real_arm_profile)
         return ArmPiAdapterStub()
@@ -74,7 +112,15 @@ class DemoApplication:
             adapter,
             self.store,
             constraints=profile.safety_constraints if profile else None,
-            scene_id=profile.scene_id if profile else "mock-fixed-workbench-v0",
+            # Prefer the selected adapter's pinned scene identifier.  The
+            # virtual workcell has no hardware profile, but its scene is still
+            # part of the immutable experimental conditions and must not fall
+            # back to the legacy mock identifier.
+            scene_id=(
+                profile.scene_id
+                if profile
+                else getattr(adapter, "scene_id", "mock-fixed-workbench-v0")
+            ),
             target_pose=profile.target_pose if profile else None,
             destination_pose=profile.destination_pose if profile else None,
             execution_scenario=scenario,
@@ -99,6 +145,7 @@ class DemoApplication:
                 qwen.update({"enabled": True, **status})
         except QwenConfigurationError as error:
             qwen["error"] = str(error)
+        baselines = list_hardware_baselines()
         return {
             "qwen": qwen,
             "project_policy": {
@@ -109,8 +156,149 @@ class DemoApplication:
             "campaign_api": {
                 "use_qwen_default": True,
                 "deterministic_only_requires_explicit_false": True,
+                "validation_endpoint": "/api/validation",
+            },
+            "virtual_runtime": {
+                "enabled": True,
+                "runtime_name": "roboscientist.virtual_workcell",
+                "runtime_version": "1.0.0",
+                "engine": "python_deterministic",
+                "data_source": "simulation",
+                "hardware_status": "simulation_runtime_verified",
+                "physical_robot_connected": False,
+                "gazebo_moveit2": "not_used",
+            },
+            # Keep /api/config compact: callers that need the documented
+            # parameter snapshots should use /api/hardware/baselines.
+            "hardware_baselines": {
+                "count": len(baselines),
+                "ids": [baseline.baseline_id for baseline in baselines],
+                "data_source": HARDWARE_REFERENCE_SOURCE,
+                "current_hardware_verified": False,
+                "read_only": True,
+                "motion_requested": False,
+            },
+            "hardware_evidence": {
+                "configured": self.hardware_evidence_source is not None,
+                "source_name": (
+                    self.hardware_evidence_source.name
+                    if self.hardware_evidence_source is not None
+                    else None
+                ),
+                "validator": "evidence_package_validator",
+                "read_only": True,
+                "motion_requested": False,
+            },
+            "replay": {
+                "configured": self.replay_service.configured,
+                "read_only": True,
+                "motion_requested": False,
+                "source_name": self.replay_service.root.name if self.replay_service.root else None,
             },
         }
+
+    @staticmethod
+    def health() -> dict:
+        """Small deployment probe with an explicit no-physical-arm boundary."""
+        return {
+            "status": "ok",
+            "service": "roboscientist",
+            "api_version": "v1",
+            "virtual_runtime": "ready",
+            "physical_robot": "disabled",
+            "claims": "software_and_virtual_experiment_only",
+        }
+
+    @staticmethod
+    def hardware_baselines() -> dict:
+        """Return documented hardware snapshots without enabling execution.
+
+        These values are reference material extracted from delivery archives;
+        they are intentionally not wired into ``RealArmAdapter`` or any motion
+        path.  The explicit boundary fields make that distinction visible to
+        API and UI consumers.
+        """
+
+        baselines = [baseline.to_dict() for baseline in list_hardware_baselines()]
+        return {
+            "status": "available",
+            "data_source": HARDWARE_REFERENCE_SOURCE,
+            "read_only": True,
+            "motion_requested": False,
+            "current_hardware_verified": False,
+            "baseline_count": len(baselines),
+            "baseline_ids": [baseline["baseline_id"] for baseline in baselines],
+            "baselines": baselines,
+        }
+
+    @staticmethod
+    def hardware_baseline(baseline_id: str) -> dict:
+        """Return one documented baseline, or raise ``KeyError`` for unknown IDs."""
+
+        baseline = get_hardware_baseline(baseline_id)
+        data = baseline.to_dict()
+        # Keep the object nested for new clients while exposing the common
+        # fields at the top level for simple callers and backwards-compatible
+        # inspection in scripts.
+        return {
+            "status": "available",
+            "data_source": HARDWARE_REFERENCE_SOURCE,
+            "read_only": True,
+            "motion_requested": False,
+            "current_hardware_verified": baseline.current_hardware_verified,
+            "baseline": data,
+            **data,
+        }
+
+    def hardware_evidence(self) -> dict:
+        """Validate the configured delivery package without accepting a path from HTTP.
+
+        The source is fixed when the application starts (constructor, CLI, or
+        ``ROBO_HARDWARE_EVIDENCE_ROOT``).  A browser can therefore inspect the
+        report but cannot ask the server to read an arbitrary local path.
+        """
+
+        if self.hardware_evidence_source is None:
+            return {
+                "status": "unavailable",
+                "data_source": HARDWARE_EVIDENCE_SOURCE,
+                "read_only": True,
+                "motion_requested": False,
+                "source_configured": False,
+                "source_name": None,
+                "reason_code": "HARDWARE_EVIDENCE_SOURCE_NOT_CONFIGURED",
+                "message": "no hardware evidence package is configured",
+                "validation": None,
+            }
+
+        validation = validate_evidence_package(self.hardware_evidence_source)
+        status = validation.get("status", "invalid")
+        return {
+            "status": status,
+            "data_source": HARDWARE_EVIDENCE_SOURCE,
+            "read_only": True,
+            "motion_requested": False,
+            "source_configured": True,
+            "source_name": self.hardware_evidence_source.name,
+            "reason_code": "HARDWARE_EVIDENCE_{}".format(status.upper()),
+            "validation": validation,
+            # Flatten the stable report fields for small clients; the nested
+            # object remains the authoritative validator response.
+            "package_type": validation.get("package_type"),
+            "files_checked": validation.get("files_checked", []),
+            "missing": validation.get("missing", []),
+            "warnings": validation.get("warnings", []),
+            "claims_supported": validation.get("claims_supported", {}),
+            "expected_claims": validation.get("expected_claims", []),
+        }
+
+    def replay(self, run_id: Optional[str] = None) -> dict:
+        """Return historical motion evidence without selecting an execution adapter."""
+        return (
+            self.replay_service.get_run(run_id)
+            if run_id is not None
+            else self.replay_service.list_runs()
+        )
 
     def runtime(self, mode: str) -> dict:
         adapter = self._adapter_for(mode, MockScenario.SUCCESS.value)
@@ -163,7 +351,7 @@ class DemoApplication:
         data_source = record["result"]["data_source"]
         notices = {
             "mock": "流程 Mock 只验证规划、归因和版本演进，不代表真实机械臂数据。",
-            "simulation": "Gazebo/MoveIt2 虚拟仿真；运行时是否接通以本轮状态为准。",
+            "simulation": "纯 Python 软件虚拟工作单元；不等同于 Gazebo/MoveIt2 或真实机械臂。",
             "real_arm": "真实机械臂结果；运动需通过本地配置、桥接健康检查和双重放行门。",
         }
         record["execution_mode"] = data_source
@@ -237,6 +425,68 @@ class DemoApplication:
         campaign["promotion"] = "candidate_only"
         return campaign
 
+    def run_validation(
+        self,
+        task_text: str,
+        scenario: str,
+        mode: str = ExecutionMode.SIMULATION.value,
+        repeats: int = 10,
+        use_qwen: bool = False,
+    ) -> dict:
+        """Run a campaign plus repeated P0/P1 observations for submission evidence."""
+
+        if mode == ExecutionMode.REAL_ARM.value:
+            raise ValueError("repeated validation is disabled for real_arm in the no-physical-arm build")
+        campaign = self.run_campaign(
+            task_text,
+            scenario,
+            mode,
+            max_rounds=2,
+            use_qwen=use_qwen,
+            auto_run_p1=True,
+        )
+        records = campaign.get("records", [])
+        if len(records) < 2:
+            campaign["validation"] = {
+                "format_version": "validation-v1",
+                "status": "blocked",
+                "reason": "campaign did not produce both P0 and P1 records",
+            }
+            return campaign
+        p0_record = records[0]
+        candidate_payload = p0_record.get("candidate_skill")
+        if not candidate_payload:
+            campaign["validation"] = {
+                "format_version": "validation-v1",
+                "status": "blocked",
+                "reason": "P0 did not produce an allowed candidate Skill",
+            }
+            return campaign
+        baseline_skill = SkillVersion.model_validate(p0_record["plan"]["skill"])
+        candidate_skill = SkillVersion.model_validate(candidate_payload)
+        orchestrator = self._orchestrator_for(mode, scenario)
+        scientific_plan = campaign.get("scientific_plan")
+        feedback = campaign.get("feedback_adjustment")
+        from roboscientist.schemas import FeedbackAdjustmentDraft, ScientificPlanDraft
+
+        validation = run_repeated_validation(
+            store=self.store,
+            orchestrator=orchestrator,
+            task_text=task_text,
+            baseline_skill=baseline_skill,
+            candidate_skill=candidate_skill,
+            repeats=repeats,
+            scientific_plan=(ScientificPlanDraft.model_validate(scientific_plan) if scientific_plan else None),
+            feedback_adjustment=(FeedbackAdjustmentDraft.model_validate(feedback) if feedback else None),
+            planning_source="qwen" if use_qwen else "deterministic",
+        )
+        validation["status"] = "completed"
+        validation["campaign_id"] = campaign["campaign_id"]
+        self.store.write_campaign_validation(campaign["campaign_id"], validation)
+        campaign["validation"] = validation
+        campaign["validation_status"] = validation["comparison"]["decision"]
+        return campaign
+
     def campaign(self, campaign_id: str) -> dict:
         payload = self.store.read_campaign(campaign_id)
         payload["records"] = [
@@ -247,8 +497,27 @@ class DemoApplication:
         payload["rounds_completed"] = len(payload["records"])
         return payload
 
+    def campaign_validation(self, campaign_id: str) -> dict:
+        payload = self.store.read_campaign(campaign_id)
+        validation = payload.get("validation")
+        if validation is None:
+            raise FileNotFoundError(f"validation does not exist: {campaign_id}")
+        return validation
 
-MockApplication = DemoApplication
+
+class MockApplication(DemoApplication):
+    """Backwards-compatible fixture facade used by the legacy unit tests.
+
+    The production HTTP server uses :class:`DemoApplication` and therefore
+    enables the verified, self-contained virtual workcell.  Older callers
+    imported ``MockApplication`` to assert the inert SimulationAdapter
+    contract; keeping that facade avoids silently changing their expectations
+    while still exposing ``virtual_simulation=True`` when desired.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("virtual_simulation", False)
+        super().__init__(*args, **kwargs)
 
 
 class RoboScientistHandler(BaseHTTPRequestHandler):
@@ -344,12 +613,40 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
         if path == "/api/config":
             self._send_json(HTTPStatus.OK, self.application.config())
             return
+        if path == "/api/health":
+            self._send_json(HTTPStatus.OK, self.application.health())
+            return
+        if path == "/api/hardware/baselines":
+            self._send_json(HTTPStatus.OK, self.application.hardware_baselines())
+            return
+        matched = HARDWARE_BASELINE_PATH.match(path)
+        if matched:
+            try:
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.application.hardware_baseline(matched.group(1)),
+                )
+            except KeyError as error:
+                self._error(HTTPStatus.NOT_FOUND, str(error))
+            return
+        if path == "/api/hardware/evidence":
+            self._send_json(HTTPStatus.OK, self.application.hardware_evidence())
+            return
         if path == "/api/runtime":
             try:
                 mode = parse_qs(parsed.query).get("mode", ["mock"])[0]
                 self._send_json(HTTPStatus.OK, self.application.runtime(mode))
             except ValueError as error:
                 self._error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        if path == "/api/replay":
+            query = parse_qs(parsed.query)
+            run_id = query.get("run_id", [None])[0]
+            self._send_json(HTTPStatus.OK, self.application.replay(run_id))
+            return
+        matched = REPLAY_PATH.match(path)
+        if matched:
+            self._send_json(HTTPStatus.OK, self.application.replay(matched.group(1)))
             return
         matched = EXPERIMENT_PATH.match(path)
         if matched:
@@ -362,6 +659,16 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
         if matched:
             try:
                 self._send_json(HTTPStatus.OK, self.application.campaign(matched.group(1)))
+            except FileNotFoundError as error:
+                self._error(HTTPStatus.NOT_FOUND, str(error))
+            return
+        matched = CAMPAIGN_VALIDATION_PATH.match(path)
+        if matched:
+            try:
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.application.campaign_validation(matched.group(1)),
+                )
             except FileNotFoundError as error:
                 self._error(HTTPStatus.NOT_FOUND, str(error))
             return
@@ -387,6 +694,16 @@ class RoboScientistHandler(BaseHTTPRequestHandler):
                     body.get("max_rounds", 2),
                     body.get("use_qwen", True),
                     body.get("auto_run_p1", True),
+                )
+                self._send_json(HTTPStatus.CREATED, response)
+                return
+            if self.path == "/api/validation":
+                response = self.application.run_validation(
+                    body.get("task_text"),
+                    body.get("scenario", "pose_offset"),
+                    body.get("mode", ExecutionMode.SIMULATION.value),
+                    body.get("repeats", 10),
+                    body.get("use_qwen", False),
                 )
                 self._send_json(HTTPStatus.CREATED, response)
                 return
@@ -427,8 +744,16 @@ def create_server(
     host: str = "127.0.0.1", port: int = 8001, data_root: Union[Path, str] = "data",
     real_arm_profile: Optional[Union[Path, str]] = None,
     qwen_client: Optional[QwenClient] = None,
+    replay_source: Optional[Union[Path, str]] = None,
+    hardware_evidence_source: Optional[Union[Path, str]] = None,
 ) -> ThreadingHTTPServer:
-    RoboScientistHandler.application = DemoApplication(data_root, real_arm_profile, qwen_client)
+    RoboScientistHandler.application = DemoApplication(
+        data_root,
+        real_arm_profile,
+        qwen_client,
+        replay_source,
+        hardware_evidence_source,
+    )
     return ThreadingHTTPServer((host, port), RoboScientistHandler)
 
 
@@ -438,8 +763,20 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--data-root", default="data")
     parser.add_argument("--real-arm-profile", help="approved real-arm profile JSON; absent means real-arm mode is blocked")
+    parser.add_argument(
+        "--replay-source",
+        help="historical ArmPi run directory or tar archive for read-only replay",
+    )
+    parser.add_argument(
+        "--hardware-evidence-source",
+        help="hardware P0/P1 evidence directory or archive for read-only validation",
+    )
     args = parser.parse_args()
-    server = create_server(args.host, args.port, args.data_root, args.real_arm_profile)
+    server = create_server(
+        args.host, args.port, args.data_root, args.real_arm_profile,
+        replay_source=args.replay_source,
+        hardware_evidence_source=args.hardware_evidence_source,
+    )
     print(f"RoboScientist demo: http://{args.host}:{args.port}")
     try:
         server.serve_forever()

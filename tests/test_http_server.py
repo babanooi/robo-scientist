@@ -2,6 +2,8 @@ import json
 import tempfile
 import threading
 import unittest
+from http.server import ThreadingHTTPServer
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -35,17 +37,32 @@ class HttpServerTests(unittest.TestCase):
             self.thread.join(timeout=2)
         self.temporary.cleanup()
 
-    def start_server(self, qwen_client=None):
+    def start_server(self, qwen_client=None, replay_source=None):
         self.server = create_server(
             "127.0.0.1",
             0,
             self.temporary.name,
             qwen_client=qwen_client,
+            replay_source=replay_source,
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         host, port = self.server.server_address
         return f"http://{host}:{port}"
+
+    def write_replay_run(self):
+        """Create the smallest valid historical run for an HTTP smoke test."""
+        run_dir = Path(self.temporary.name) / "history-run"
+        run_dir.mkdir()
+        (run_dir / "joint_states_session.csv").write_text(
+            "wall_time_ns,ros_sec,ros_nsec,sample_id,shape,phase,joint_name,position_rad,velocity,effort\n"
+            "1000000000,1,0,1,cuboid,grasp,joint1,0.0,,\n"
+            "1000000000,1,0,1,cuboid,grasp,joint2,0.1,,\n"
+            "1100000000,1,100000000,1,cuboid,grasp,joint1,0.2,,\n"
+            "1100000000,1,100000000,1,cuboid,grasp,joint2,0.3,,\n",
+            encoding="utf-8",
+        )
+        return run_dir
 
     @staticmethod
     def post(url, payload):
@@ -144,6 +161,41 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["mode"], "real_arm")
         self.assertEqual(payload["stop"]["action"], "stop")
+
+    def test_replay_list_route_uses_threading_http_server(self):
+        run_dir = self.write_replay_run()
+        base = self.start_server(replay_source=run_dir)
+        self.assertIsInstance(self.server, ThreadingHTTPServer)
+
+        with urlopen(f"{base}/api/replay", timeout=5) as response:
+            status = response.status
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "available")
+        self.assertEqual(payload["data_source"], "historical_real_arm")
+        self.assertTrue(payload["read_only"])
+        self.assertFalse(payload["motion_requested"])
+        self.assertEqual(payload["run_count"], 1)
+        self.assertEqual(payload["runs"][0]["run_id"], run_dir.name)
+
+    def test_replay_detail_route_uses_threading_http_server(self):
+        run_dir = self.write_replay_run()
+        base = self.start_server(replay_source=run_dir)
+        self.assertIsInstance(self.server, ThreadingHTTPServer)
+
+        with urlopen(f"{base}/api/replay/{run_dir.name}", timeout=5) as response:
+            status = response.status
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "available")
+        self.assertEqual(payload["run_id"], run_dir.name)
+        self.assertEqual(payload["data_source"], "historical_real_arm")
+        self.assertTrue(payload["read_only"])
+        self.assertFalse(payload["motion_requested"])
+        self.assertGreater(payload["trajectory"]["returned_points"], 0)
+        self.assertFalse(payload["evidence"]["success_labels_available"])
 
 
 if __name__ == "__main__":
