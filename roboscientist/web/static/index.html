@@ -3,92 +3,403 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RoboScientist | Simulation Lab</title>
+    <meta name="color-scheme" content="light">
+    <title>RoboScientist | 科学实验闭环控制台</title>
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
     <header class="masthead">
-      <div>
-        <p class="eyebrow">ROBO SCIENTIST / S0-S1</p>
-        <h1>实验反馈控制台</h1>
+      <div class="brand-lockup">
+        <p class="eyebrow">ROBO SCIENTIST / CLOSED-LOOP LAB</p>
+        <h1>机械臂科学实验控制台</h1>
+        <p class="header-subtitle">规划、执行、观测与反馈迭代的可审计工作台</p>
       </div>
-      <div class="system-state"><span class="state-dot"></span> LOCAL DEMO</div>
+      <div class="header-status">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span id="system-state">正在读取运行配置</span>
+        <button id="stop-button" class="stop-action" type="button" title="立即请求安全停止并转人工接管" aria-label="立即请求安全停止并转人工接管">停止 / 接管</button>
+      </div>
     </header>
 
     <main>
-      <section class="mock-banner" aria-label="数据来源说明">
-        <strong id="mode-label">SIMULATION</strong>
-        <span id="mode-notice">Gazebo/MoveIt2 虚拟仿真。当前运行时状态会在执行结果中明确显示。</span>
+      <section class="source-banner" aria-label="当前运行来源与服务状态">
+          <div class="source-copy">
+          <span id="mode-label" class="source-badge source-simulation">SIMULATION · 虚拟工作台</span>
+          <span id="mode-notice">项目自带纯 Python 虚拟工作台；结果标记为 simulation，不连接实机。</span>
+        </div>
+        <div class="service-status">
+          <span id="qwen-status" class="service-chip is-checking">Qwen · 检查中</span>
+          <div id="runtime-capabilities" class="runtime-capabilities"><span>运行时 · 检查中</span></div>
+        </div>
       </section>
 
-      <section class="workbench" aria-label="任务执行台">
-        <form id="task-form" class="command-panel">
-          <p class="panel-kicker">01 / TASK INPUT</p>
-          <label for="task-text">实验指令</label>
-          <textarea id="task-text" name="task_text" rows="4">把红色方块放到右侧目标区域</textarea>
-          <fieldset>
-            <legend>执行模式</legend>
-            <div class="mode-grid">
-              <label><input type="radio" name="mode" value="simulation" checked><span>虚拟仿真<br><small>Gazebo + MoveIt2</small></span></label>
-              <label><input type="radio" name="mode" value="mock"><span>流程 Mock<br><small>本地开发兜底</small></span></label>
-              <label><input type="radio" name="mode" value="real_arm"><span>真实机械臂<br><small>未来安全接入</small></span></label>
-            </div>
-          </fieldset>
-          <fieldset>
-            <legend>注入场景（Mock 模式使用）</legend>
-            <div class="scenario-grid">
-              <label><input type="radio" name="scenario" value="success" checked><span>成功</span></label>
-              <label><input type="radio" name="scenario" value="pose_offset"><span>定位偏差</span></label>
-              <label><input type="radio" name="scenario" value="grasp_failed"><span>抓取失败</span></label>
-              <label><input type="radio" name="scenario" value="timeout"><span>执行超时</span></label>
-            </div>
-          </fieldset>
-          <button id="run-button" type="submit">提交实验</button>
-        </form>
+      <section id="motion-monitor" class="motion-monitor" aria-labelledby="motion-monitor-title">
+        <div class="section-heading motion-monitor-heading">
+          <div>
+            <p class="panel-kicker">07 / ACTION OBSERVATORY</p>
+            <h2 id="motion-monitor-title">动作画面与历史轨迹回放</h2>
+          </div>
+          <div class="motion-mode-readout">
+            <span id="motion-view-status" class="status status-idle">等待虚拟实验</span>
+            <span id="motion-data-source-badge" class="source-badge source-simulation">DATA SOURCE · Simulation / 虚拟工作台</span>
+          </div>
+        </div>
 
-        <section class="telemetry" aria-live="polite">
+        <div class="motion-monitor-grid">
+          <section class="motion-viewport-card" aria-labelledby="motion-view-title">
+            <div class="viewport-toolbar">
+              <span id="motion-view-kind" class="viewport-kind">VIRTUAL VIEW</span>
+              <span id="motion-view-connection" class="status status-idle">未连接</span>
+            </div>
+            <div id="motion-viewport" class="motion-viewport is-unavailable" role="img" aria-live="polite" aria-label="虚拟工作台尚未运行">
+              <div class="viewport-grid-lines" aria-hidden="true"></div>
+              <div class="viewport-reticle" aria-hidden="true"><span></span></div>
+              <iframe id="motion-live-frame" class="motion-live-frame" title="实时相机画面" loading="lazy" hidden></iframe>
+              <div id="virtual-workcell" class="virtual-workcell" hidden></div>
+              <div id="motion-viewport-message" class="viewport-message">
+                <span id="motion-view-overline" class="viewport-overline">SIMULATION / READY</span>
+                <strong id="motion-view-title">等待虚拟实验</strong>
+                <p id="motion-view-description">运行 P0 或 P0→P1 闭环后，这里显示项目自带虚拟工作台的场景与轨迹。</p>
+              </div>
+            </div>
+            <div class="viewport-caption">
+              <span id="motion-frame-source">roboscientist.virtual_workcell</span>
+              <span id="motion-frame-note">纯 Python · 非实机</span>
+            </div>
+          </section>
+
+          <section class="motion-runtime-card" aria-labelledby="runtime-gate-title">
+            <div class="section-heading compact">
+              <div>
+                <p class="panel-kicker">RUNTIME GATE</p>
+                <h3 id="runtime-gate-title">连接与安全状态</h3>
+              </div>
+              <span id="motion-runtime-age" class="sample-note">尚未刷新</span>
+            </div>
+
+            <div class="motion-status-grid" aria-live="polite">
+              <div class="motion-status-tile">
+                <span class="field-label">数据来源</span>
+                <strong id="motion-data-source">-</strong>
+                <small id="motion-data-source-detail">等待选择运行模式</small>
+              </div>
+              <div class="motion-status-tile">
+                <span class="field-label">Bridge</span>
+                <strong id="motion-bridge-status">-</strong>
+                <small id="motion-bridge-detail">等待 /runtime</small>
+              </div>
+              <div class="motion-status-tile">
+                <span class="field-label">运动状态</span>
+                <strong id="motion-motion-status">-</strong>
+                <small id="motion-motion-detail">不发送底层运动命令</small>
+              </div>
+              <div class="motion-status-tile">
+                <span class="field-label">预检</span>
+                <strong id="motion-preflight-status">-</strong>
+                <small id="motion-preflight-detail">尚未执行实验</small>
+              </div>
+              <div class="motion-status-tile">
+                <span class="field-label">停止 / 接管</span>
+                <strong id="motion-stop-status">-</strong>
+                <small id="motion-stop-detail">停止按钮仅向实机 bridge 发请求</small>
+              </div>
+            </div>
+
+            <div id="motion-disclosure" class="motion-disclosure">
+              <span class="field-label">状态说明</span>
+              <p>运行时状态来自 API；缺少硬件证据时，页面只显示不可用或待验证，不会推断机械臂已经运动。</p>
+            </div>
+
+            <div class="trajectory-replay" aria-labelledby="trajectory-title">
+              <div class="trajectory-heading">
+                <div>
+                  <span class="field-label">RECORDED MOTION</span>
+                  <h3 id="trajectory-title">历史轨迹回放</h3>
+                </div>
+                <div class="trajectory-heading-actions">
+                  <label class="trajectory-source-label" for="trajectory-source-select">回放数据</label>
+                  <select id="trajectory-source-select" class="trajectory-source-select" aria-label="选择回放数据">
+                    <option value="historical" selected>历史实机 · 读取中</option>
+                    <option value="__current__">当前实验记录</option>
+                  </select>
+                  <span id="trajectory-status" class="status status-idle">暂无证据</span>
+                </div>
+              </div>
+              <div id="trajectory-chart" class="trajectory-chart" aria-live="polite">
+                <p class="trajectory-empty">正在读取历史实机轨迹……</p>
+              </div>
+              <div class="trajectory-chart-meta">
+                <span id="trajectory-point-detail">尚未选择轨迹点</span>
+                <span id="trajectory-source-detail">只读数据 · 不发送运动命令</span>
+              </div>
+              <div id="trajectory-track" class="trajectory-track" aria-live="polite">
+                <p class="trajectory-empty">运行一轮实验后，这里显示已记录的动作阶段；没有轨迹文件时不会绘制虚构路径。</p>
+              </div>
+              <div class="trajectory-controls">
+                <button id="trajectory-replay-button" class="tertiary-action" type="button" disabled>播放动作阶段</button>
+                <span id="trajectory-progress" class="trajectory-progress">尚未载入回放</span>
+              </div>
+              <div id="trajectory-metrics" class="trajectory-metrics" aria-label="回放指标">
+                <span><em id="trajectory-path-label">路径</em> <strong id="trajectory-path-metric">-</strong></span>
+                <span><em id="trajectory-time-label">执行</em> <strong id="trajectory-time-metric">-</strong></span>
+                <span><em id="trajectory-safety-label">安全事件</em> <strong id="trajectory-safety-metric">-</strong></span>
+              </div>
+              <p id="trajectory-note" class="trajectory-note">回放只高亮历史事件，不会重新发送机械臂运动命令。</p>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="hardware-evidence-panel" class="hardware-evidence-panel" aria-labelledby="hardware-evidence-title">
+        <div class="section-heading hardware-evidence-heading">
+          <div>
+            <p class="panel-kicker">08 / HARDWARE EVIDENCE GATE</p>
+            <h2 id="hardware-evidence-title">硬件基线与证据门</h2>
+          </div>
+          <div class="hardware-evidence-readout">
+            <span id="hardware-evidence-status" class="status status-idle">读取中</span>
+            <span id="hardware-reference-badge" class="source-badge source-unknown">REFERENCE · 未加载</span>
+          </div>
+        </div>
+
+        <div class="hardware-evidence-grid">
+          <section class="hardware-baseline-card" aria-labelledby="hardware-baseline-title">
+            <div class="section-heading compact">
+              <div>
+                <span class="field-label">DOCUMENTED BASELINE</span>
+                <h3 id="hardware-baseline-title">参数快照</h3>
+              </div>
+              <label class="hardware-baseline-select-label" for="hardware-baseline-select">选择流程</label>
+              <select id="hardware-baseline-select" class="hardware-baseline-select" aria-label="选择硬件基线">
+                <option value="" selected>读取中……</option>
+              </select>
+            </div>
+            <div id="hardware-baseline-summary" class="hardware-baseline-summary">
+              <p class="hardware-empty">正在读取硬件资料基线……</p>
+            </div>
+            <div id="hardware-parameter-list" class="hardware-parameter-list" aria-live="polite">
+              <p class="hardware-empty">参数将在基线加载后显示。</p>
+            </div>
+          </section>
+
+          <section class="hardware-proof-card" aria-labelledby="hardware-proof-title">
+            <div class="section-heading compact">
+              <div>
+                <span class="field-label">DELIVERY PACKAGE CHECK</span>
+                <h3 id="hardware-proof-title">证据包校验</h3>
+              </div>
+              <span id="hardware-proof-time" class="sample-note">尚未校验</span>
+            </div>
+            <div class="hardware-proof-state">
+              <strong id="hardware-proof-state">未配置证据包</strong>
+              <p id="hardware-proof-message">请通过服务器启动参数指定硬件实验包；页面不会读取任意本地路径。</p>
+            </div>
+            <dl id="hardware-proof-facts" class="hardware-proof-facts">
+              <div><dt>包类型</dt><dd>-</dd></div>
+              <div><dt>已检查文件</dt><dd>-</dd></div>
+              <div><dt>缺失项</dt><dd>-</dd></div>
+              <div><dt>支持声明</dt><dd>-</dd></div>
+            </dl>
+            <div id="hardware-proof-missing" class="hardware-proof-missing">
+              <span class="field-label">缺失或警告</span>
+              <p>没有校验结果。</p>
+            </div>
+          </section>
+        </div>
+        <p class="hardware-evidence-note">参数存在 ≠ 当前实机已验证。只有包含评价 JSON、阶段证据、运行日志、桥接结果和校验信息的完整实验包，才可能通过证据门；该面板始终是只读的，不会触发机械臂运动。</p>
+      </section>
+
+      <section class="workspace-grid" aria-label="实验配置与科学意图">
+        <form id="task-form" class="command-panel">
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">02 / EXPERIMENT TRACE</p>
-              <h2 id="result-title">等待任务</h2>
+              <p class="panel-kicker">01 / EXPERIMENT SETUP</p>
+              <h2>定义 P0 基线</h2>
             </div>
-            <span id="run-status" class="status status-idle">IDLE</span>
+            <span class="locked-note">P1 条件锁定继承</span>
           </div>
-          <div class="flow" id="flow">
-            <div>TaskSpec</div><i></i><div>Plan</div><i></i><div>Safety</div><i></i><div>Adapter</div><i></i><div>Result</div>
+
+          <label for="task-text">任务目标</label>
+          <textarea id="task-text" name="task_text" rows="3">把红色方块放到右侧目标区域</textarea>
+
+          <fieldset>
+            <legend>证据来源</legend>
+            <div class="mode-grid">
+              <label><input type="radio" name="mode" value="mock"><span><strong>Mock</strong><small>软件流程验证</small></span></label>
+              <label><input type="radio" name="mode" value="simulation" checked><span><strong>Simulation</strong><small>纯 Python 虚拟工作台（软件仿真证据）</small></span></label>
+              <label><input type="radio" name="mode" value="real_arm"><span><strong>Real Arm</strong><small>实机证据</small></span></label>
+            </div>
+          </fieldset>
+
+          <fieldset id="scenario-fieldset">
+            <legend>场景扰动 / 评价条件</legend>
+            <div class="scenario-grid">
+              <label><input type="radio" name="scenario" value="pose_offset" checked><span>定位偏差</span></label>
+              <label><input type="radio" name="scenario" value="path_risk"><span>路径风险</span></label>
+              <label><input type="radio" name="scenario" value="grasp_failed"><span>抓取失败</span></label>
+              <label><input type="radio" name="scenario" value="timeout"><span>执行超时</span></label>
+              <label><input type="radio" name="scenario" value="success"><span>任务成功</span></label>
+            </div>
+          </fieldset>
+
+          <label id="qwen-control" class="qwen-control is-unavailable">
+            <input id="use-qwen" type="checkbox" disabled>
+            <span><strong>启用 Qwen 科学规划与反馈</strong><small id="qwen-control-help">等待服务器配置</small></span>
+          </label>
+
+          <div class="action-stack">
+            <button id="campaign-button" class="primary-action" type="button">运行 P0 → P1 科研闭环</button>
+            <button id="run-button" class="secondary-action" type="submit">仅运行 P0（诊断）</button>
+            <button id="reset-button" class="tertiary-action" type="button" disabled>重置 P0 条件</button>
           </div>
+          <p class="form-note">闭环运行会固定任务、场景、目标位姿、标定和评价方式；反馈只允许修改一个参数族。</p>
+          <p class="form-note">Simulation 是项目自带纯 Python 虚拟工作台，不连接实机；若选择 Mock，仅验证流程契约。</p>
+        </form>
+
+        <section class="science-panel" aria-live="polite">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">02 / SCIENTIFIC INTENT</p>
+              <h2 id="result-title">研究问题与假设</h2>
+            </div>
+            <div class="status-group">
+              <span id="planning-source" class="status status-idle">等待规划</span>
+              <span id="run-status" class="status status-idle">IDLE</span>
+            </div>
+          </div>
+
+          <div class="science-copy">
+            <article>
+              <span class="field-label">研究问题</span>
+              <p id="research-question">运行 Qwen 科研闭环后显示。</p>
+            </article>
+            <article>
+              <span class="field-label">可检验假设</span>
+              <p id="hypothesis">系统必须先记录 P0 结果，再决定是否生成 P1。</p>
+            </article>
+          </div>
+
           <dl class="run-facts" id="run-facts">
-            <div><dt>实验 ID</dt><dd>-</dd></div>
-            <div><dt>数据源</dt><dd>mock</dd></div>
-            <div><dt>Skill</dt><dd>-</dd></div>
+            <div><dt>Campaign ID</dt><dd>-</dd></div>
+            <div><dt>闭环分类</dt><dd>未分类</dd></div>
+            <div><dt>数据来源</dt><dd>Simulation</dd></div>
             <div><dt>场景</dt><dd>-</dd></div>
-            <div><dt>运行时状态</dt><dd>-</dd></div>
+            <div><dt>结果评估器</dt><dd>-</dd></div>
+            <div><dt>安全检查</dt><dd>-</dd></div>
           </dl>
+
+          <div id="current-evidence" class="current-evidence">
+            <span class="field-label">当前结论</span>
+            <p>尚未运行实验。Simulation 为项目自带纯 Python 虚拟工作台，不连接实机。</p>
+          </div>
         </section>
       </section>
 
-      <section class="readouts">
-        <article>
-          <p class="panel-kicker">03 / PLAN + SAFETY</p>
+      <section class="feedback-loop" aria-labelledby="loop-title">
+        <div class="section-heading">
+          <div>
+            <p class="panel-kicker">03 / PLAN → RUN → LEARN → RETRY</p>
+            <h2 id="loop-title">反馈如何改变下一轮计划</h2>
+          </div>
+          <span id="sample-note" class="sample-note">尚未开始</span>
+        </div>
+        <div id="loop-track" class="loop-track">
+          <article class="loop-step is-pending"><span class="step-index">01</span><h3>Qwen 规划</h3><p>等待研究问题、假设和成功标准。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">P0</span><h3>安全执行</h3><p>等待确定性安全检查和基线运行。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">03</span><h3>结果评价</h3><p>等待结构化结果与失败残差。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">04</span><h3>反馈决策</h3><p>等待 Qwen 接受、拒绝或停止。</p></article>
+          <article class="loop-step is-pending"><span class="step-index">P1</span><h3>同条件验证</h3><p>仅在条件一致且安全检查通过后执行。</p></article>
+        </div>
+        <div class="decision-row">
+          <div id="decision-output" class="decision-output decision-pending">
+            <span class="decision-code">WAIT</span>
+            <div><strong>反馈决策待定</strong><p>系统不会把动作完成或人工确认表述为自主反馈成功。</p></div>
+          </div>
+          <button id="iterate-button" class="secondary-action" type="button" disabled>按 P0 固定条件验证 P1</button>
+        </div>
+      </section>
+
+      <section class="qwen-evidence" aria-labelledby="qwen-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="panel-kicker">04 / QWEN AUDIT TRAIL</p>
+            <h2 id="qwen-title">模型调用证据</h2>
+          </div>
+          <span class="sample-note">密钥不会写入证据</span>
+        </div>
+        <div class="qwen-evidence-grid">
+          <article id="planning-evidence" class="audit-card">
+            <div class="audit-heading"><strong>科学规划</strong><span class="audit-state">未调用</span></div>
+            <dl><div><dt>模型</dt><dd>-</dd></div><div><dt>Request ID</dt><dd>-</dd></div><div><dt>Prompt SHA256</dt><dd>-</dd></div></dl>
+          </article>
+          <article id="feedback-evidence" class="audit-card">
+            <div class="audit-heading"><strong>结果反馈</strong><span class="audit-state">未调用</span></div>
+            <dl><div><dt>模型</dt><dd>-</dd></div><div><dt>Request ID</dt><dd>-</dd></div><div><dt>Prompt SHA256</dt><dd>-</dd></div></dl>
+          </article>
+        </div>
+      </section>
+
+      <section class="evidence-grid" aria-label="迭代证据">
+        <section class="lineage-panel">
+          <div class="section-heading compact">
+            <div><p class="panel-kicker">05 / P0-P1 LINEAGE</p><h2>实验谱系</h2></div>
+            <span id="lineage-count">0 轮</span>
+          </div>
+          <ol id="lineage-list" class="lineage-list">
+            <li class="empty-lineage">每轮实验追加保存；P1 不覆盖 P0。</li>
+          </ol>
+        </section>
+
+        <section class="comparison-panel">
+          <div class="section-heading compact">
+            <div><p class="panel-kicker">06 / SAME-CONDITION CHECK</p><h2>同条件对照</h2></div>
+            <span id="condition-status" class="status status-idle">待验证</span>
+          </div>
+          <div id="condition-output" class="condition-output">
+            <p>运行 P1 后检查模式、场景、目标、标定与评价口径是否一致。</p>
+          </div>
+          <div id="comparison-output" class="comparison-empty">获得 P0 与 P1 后显示结果和运动指标。</div>
+          <p class="policy-note"><strong>项目内部晋升策略：</strong>P0、P1 每版建议至少 10 次重复实验后再判断性能提升；这不是赛题官方固定次数。</p>
+          <div class="validation-panel">
+            <div class="validation-heading">
+              <div>
+                <span class="field-label">REPEATABLE EVIDENCE</span>
+                <h3>重复验证（固定条件）</h3>
+              </div>
+              <span class="sample-note">默认 P0 / P1 各 10 次</span>
+            </div>
+            <button id="validation-button" class="secondary-action" type="button">重复验证 P0 / P1（10 次）</button>
+            <p id="validation-status" class="validation-status">运行后生成可复算的成功率、误差、路径和安全指标。</p>
+            <div id="validation-output" class="validation-output" aria-live="polite"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="technical-trace" aria-label="可复算技术记录">
+        <details>
+          <summary>计划与安全检查</summary>
           <pre id="plan-output">尚未生成计划。</pre>
-        </article>
-        <article>
-          <p class="panel-kicker">04 / RESULT + ANALYSIS</p>
+        </details>
+        <details>
+          <summary>结果、归因与指标</summary>
           <pre id="result-output">尚未执行。</pre>
-        </article>
-        <article>
-          <p class="panel-kicker">05 / SIMULATION TELEMETRY</p>
-          <pre id="simulation-output">仅在 simulation 模式显示规划、轨迹与碰撞字段。</pre>
-        </article>
-        <article>
-          <p class="panel-kicker">06 / CANDIDATE SKILL</p>
-          <pre id="skill-output">未生成候选版本。</pre>
-          <button id="iterate-button" type="button" disabled>使用候选版本迭代</button>
-        </article>
+        </details>
+        <details>
+          <summary>Campaign 与模型元数据</summary>
+          <pre id="campaign-output">尚未运行闭环。</pre>
+        </details>
+        <details id="simulation-trace">
+          <summary>仿真遥测</summary>
+          <pre id="simulation-output">仅 Simulation 模式显示规划、轨迹与碰撞字段。</pre>
+        </details>
       </section>
     </main>
 
-    <footer>LOCAL EXPERIMENT LAB · SIMULATION-FIRST · REAL HARDWARE DISCONNECTED</footer>
+    <footer>
+      <span>ROBO SCIENTIST / EVIDENCE FIRST</span>
+      <span>MOCK ≠ SIMULATION ≠ REAL ARM</span>
+      <span>ACTION COMPLETE ≠ AUTONOMOUS SUCCESS</span>
+    </footer>
     <script src="/app.js"></script>
   </body>
 </html>

@@ -11,6 +11,8 @@ def analyze(result: ExperimentResult) -> Optional[FailureAnalysisResult]:
     family = None
     if result.failure.code in (ErrorCode.POSE_OFFSET, ErrorCode.GRASP_FAILED):
         family = "grasp_offset"
+    elif result.failure.code == ErrorCode.PATH_BLOCKED:
+        family = "path_profile"
     return FailureAnalysisResult(
         experiment_id=result.experiment_id,
         failure_code=result.failure.code,

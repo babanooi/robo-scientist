@@ -23,6 +23,13 @@ def check_plan(plan: ExperimentPlan, adapter_data_source: str) -> SafetyCheckRes
     if any(value < low or value > high for value, low, high in zip((pose.x, pose.y, pose.z), constraints.workspace_min_m, constraints.workspace_max_m)):
         errors.append(ErrorCode.OUT_OF_WORKSPACE)
         messages.append("target pose is outside the configured workspace")
+    destination = plan.destination_pose
+    if destination.frame_id != "base":
+        errors.append(ErrorCode.INVALID_PARAMETERS)
+        messages.append("destination pose must use the base frame")
+    if any(value < low or value > high for value, low, high in zip((destination.x, destination.y, destination.z), constraints.workspace_min_m, constraints.workspace_max_m)):
+        errors.append(ErrorCode.OUT_OF_WORKSPACE)
+        messages.append("destination pose is outside the configured workspace")
     parameters = plan.skill.parameters
     if parameters.speed_m_s > constraints.max_speed_m_s:
         errors.append(ErrorCode.INVALID_PARAMETERS)

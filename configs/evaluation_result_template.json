@@ -1,0 +1,19 @@
+{
+  "experiment_id": "REPLACE_WITH_EXPERIMENT_ID",
+  "evaluator_type": "vision",
+  "evaluator_version": "REPLACE_WITH_EVALUATOR_VERSION",
+  "confidence": 0.95,
+  "outcome": {
+    "object_grasped": true,
+    "object_lifted": true,
+    "object_placed": true,
+    "position_error_m": 0.004
+  },
+  "position_error_xyz_m": [0.004, 0.0, 0.0],
+  "evidence": [
+    "/absolute/path/to/before.jpg",
+    "/absolute/path/to/lift.jpg",
+    "/absolute/path/to/after.jpg"
+  ],
+  "message": "vision evaluator result"
+}

@@ -2,10 +2,10 @@
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -27,6 +27,10 @@ class ErrorCode(str, Enum):
     HARDWARE_UNVERIFIED = "HARDWARE_UNVERIFIED"
     POSE_OFFSET = "POSE_OFFSET"
     GRASP_FAILED = "GRASP_FAILED"
+    PATH_BLOCKED = "PATH_BLOCKED"
+    TARGET_NOT_FOUND = "TARGET_NOT_FOUND"
+    BRIDGE_UNAVAILABLE = "BRIDGE_UNAVAILABLE"
+    EXECUTION_FAILED = "EXECUTION_FAILED"
     TIMEOUT = "TIMEOUT"
     STOPPED = "STOPPED"
 
@@ -75,6 +79,7 @@ class TaskSpec(BaseModel):
 class SkillParameters(BaseModel):
     grasp_offset_m: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     approach_height_m: float = Field(default=0.03, gt=0.0, le=0.15)
+    transit_height_m: float = Field(default=0.12, gt=0.0, le=0.30)
     speed_m_s: float = Field(default=0.1, gt=0.0, le=1.0)
 
 
@@ -87,6 +92,37 @@ class SkillVersion(BaseModel):
     changed_parameter_family: Optional[str] = None
     change_reason: Optional[str] = None
     source_experiment_id: Optional[str] = None
+
+
+class ScientificPlanDraft(BaseModel):
+    """Qwen-authored scientific intent; it never contains robot commands."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    research_question: str = Field(min_length=1)
+    hypothesis: str = Field(min_length=1)
+    controlled_variables: List[str] = Field(min_length=1)
+    success_criteria: List[str] = Field(min_length=1)
+    stop_conditions: List[str] = Field(min_length=1)
+    expected_observation: str = Field(min_length=1)
+
+
+class FeedbackAdjustmentDraft(BaseModel):
+    """Qwen decision at the planning layer, constrained to safe strategies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_summary: str = Field(min_length=1)
+    failure_interpretation: str = Field(min_length=1)
+    strategy: Literal[
+        "signed_residual_compensation",
+        "raise_grasp_z",
+        "raise_transit_height",
+        "stop_for_human",
+    ]
+    recommended_parameter_family: Literal["grasp_offset", "path_profile", "none"]
+    expected_effect: str = Field(min_length=1)
+    alternative_explanation: str = Field(min_length=1)
 
 
 class SafetyConstraints(BaseModel):
@@ -116,10 +152,16 @@ class ExperimentPlan(BaseModel):
     skill: SkillVersion
     scene_id: str
     adapter: str
+    execution_scenario: str = "default"
     expected_data_source: str = "mock"
     target_pose: ObjectPose
+    destination_pose: Pose
     timeout_s: float = Field(default=8.0, gt=0.0)
     safety_constraints: SafetyConstraints = Field(default_factory=SafetyConstraints)
+    planning_source: Literal["deterministic", "qwen"] = "deterministic"
+    scientific_plan: Optional[ScientificPlanDraft] = None
+    feedback_adjustment: Optional[FeedbackAdjustmentDraft] = None
+    qwen_invocation_ref: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -164,7 +206,14 @@ class JointTrajectoryPoint(BaseModel):
 
 
 class SimulationExecutionData(BaseModel):
-    """MoveIt2/Gazebo execution evidence or an explicit unavailable status."""
+    """Structured virtual/simulation execution evidence.
+
+    The original contract was designed for Gazebo/MoveIt2.  The optional
+    fields below also support the project's self-contained virtual workcell so
+    the UI can render an actual, repeatable experiment when ROS is unavailable.
+    They are deliberately explicit about the runtime name and provenance; a
+    virtual workcell must never be presented as a physical-arm result.
+    """
 
     runtime_status: str
     planning_success: bool
@@ -178,6 +227,20 @@ class SimulationExecutionData(BaseModel):
     safety_events: List[str] = Field(default_factory=list)
     failure_reason: Optional[str] = None
     raw_ros_refs: List[str] = Field(default_factory=list)
+    runtime_name: Optional[str] = None
+    runtime_version: Optional[str] = None
+    engine: Optional[str] = None
+    random_seed: Optional[int] = None
+    synthetic: Optional[bool] = None
+    physical_robot_connected: Optional[bool] = None
+    scene_objects: List[Dict[str, Any]] = Field(default_factory=list)
+    tcp_trajectory: List[Pose] = Field(default_factory=list)
+    # Informational checks (for example, a verified clearance) are kept
+    # separate from adverse safety events so a successful check is not counted
+    # as a safety regression in aggregate metrics.
+    safety_observations: List[str] = Field(default_factory=list)
+    evaluation: Dict[str, Any] = Field(default_factory=dict)
+
 
 
 class ExperimentResult(BaseModel):
@@ -199,3 +262,4 @@ class ExperimentResult(BaseModel):
     failure_analysis: Optional[FailureAnalysisResult] = None
     candidate_skill_version: Optional[str] = None
     simulation: Optional[SimulationExecutionData] = None
+    replay: Optional[Dict[str, Any]] = None

@@ -43,6 +43,62 @@ class ExperimentStore:
         self._write_new(path, skill.model_dump(mode="json"))
         return path
 
+    def write_campaign(self, campaign_id: str, payload: dict) -> Path:
+        """Write the campaign summary once; individual evidence remains append-only."""
+        path = self.root / "campaigns" / campaign_id / "campaign.json"
+        self._write_new(path, payload)
+        return path
+
+    def write_campaign_validation(self, campaign_id: str, payload: dict) -> Path:
+        """Persist an optional repeated P0/P1 validation without rewriting a campaign."""
+        path = self.root / "campaigns" / campaign_id / "validation.json"
+        self._write_new(path, payload)
+        return path
+
+    def write_campaign_qwen_evidence(self, campaign_id: str, phase: str, payload: dict) -> dict:
+        """Persist request, response and metadata without ever storing credentials."""
+        if phase not in {"planning", "adjustment"}:
+            raise ValueError("Qwen evidence phase must be planning or adjustment")
+        directory = self.root / "campaigns" / campaign_id / "qwen"
+        directory.mkdir(parents=True, exist_ok=True)
+        written = {}
+        for name in ("request", "response", "metadata", "output"):
+            value = payload.get(name)
+            if value is None:
+                continue
+            path = directory / f"{phase}_{name}.json"
+            self._write_new(path, value if isinstance(value, dict) else {"value": value})
+            written[name] = str(path)
+        # Error records have no output and should still be independently visible.
+        if "error" in payload:
+            path = directory / f"{phase}_error.json"
+            self._write_new(path, {"error": str(payload["error"])})
+            written["error"] = str(path)
+        metadata_path = directory / f"{phase}_metadata.json"
+        if not metadata_path.exists():
+            metadata = payload.get("metadata", {})
+            self._write_new(metadata_path, metadata if isinstance(metadata, dict) else {"value": metadata})
+        written["metadata"] = str(metadata_path)
+        return written
+
+    def read_campaign(self, campaign_id: str) -> dict:
+        path = self.root / "campaigns" / campaign_id / "campaign.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"campaign does not exist: {campaign_id}")
+        campaign = json.loads(path.read_text(encoding="utf-8"))
+        validation_path = path.parent / "validation.json"
+        if validation_path.exists():
+            campaign["validation"] = json.loads(
+                validation_path.read_text(encoding="utf-8")
+            )
+        qwen_dir = path.parent / "qwen"
+        qwen = {}
+        if qwen_dir.is_dir():
+            for evidence in sorted(qwen_dir.glob("*.json")):
+                qwen[evidence.name] = json.loads(evidence.read_text(encoding="utf-8"))
+        campaign["qwen_evidence"] = qwen
+        return campaign
+
     def ensure_skill(self, skill: SkillVersion) -> Path:
         """Archive a stable input version once without rewriting prior evidence."""
         path = self.root / "skills" / f"{skill.version}.json"

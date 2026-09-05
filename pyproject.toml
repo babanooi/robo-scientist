@@ -5,10 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "roboscientist"
 version = "0.1.0"
-description = "S0/S1 mock feedback loop for RoboScientist"
+description = "Auditable software virtual closed-loop laboratory for RoboScientist"
 requires-python = ">=3.9"
 dependencies = ["pydantic>=2,<3"]
 
 [tool.setuptools.packages.find]
 include = ["roboscientist*"]
 
+[tool.setuptools.package-data]
+"roboscientist.web" = ["static/*.html", "static/*.js", "static/*.css"]
